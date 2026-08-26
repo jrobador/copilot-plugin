@@ -39,7 +39,7 @@ Argument handling:
 - `/copilot:review` does not support staged-only review, unstaged-only review, or extra focus text.
 - If the user needs custom review instructions or more adversarial framing, they should use `/copilot:adversarial-review`.
 - `--model` picks which model reviews the code. Leave it unset unless the user asks for one. Aliases: `opus`, `sonnet`, `codex`, `gemini`. Run `/copilot:setup` to list what the account can use.
-- `--effort` sets reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) on models that support it. Leave it unset unless the user asks.
+- `--effort` sets reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`) on models that support it. Leave it unset unless the user asks.
 
 The review runs read-only. Copilot may read the repository and run commands the
 runtime classifies as read-only; writes, network access and anything else are

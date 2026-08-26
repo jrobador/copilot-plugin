@@ -158,7 +158,7 @@ Aliases: `opus`, `sonnet`, `codex`, `gemini`. Anything else is passed through as
 a literal model id, and an unknown id fails immediately with the list of valid
 ones rather than dying mid-run. `/copilot:setup` prints the full list.
 
-`--effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) applies to
+`--effort` (`low`, `medium`, `high`, `xhigh`, `max`) applies to
 models that support reasoning effort.
 
 ## Permissions

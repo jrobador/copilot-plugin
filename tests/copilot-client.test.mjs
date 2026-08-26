@@ -136,14 +136,16 @@ describe("runPrompt", () => {
       kind: "write",
       reason: "read-only",
       mode: "read-only",
-      request: "write: src/a.js"
+      request: "write: src/a.js",
+      file: "src/a.js"
     });
     target[DECISION_SINK].current({
       allowed: true,
       kind: "write",
       reason: "write mode",
       mode: "workspace-write",
-      request: "write: src/b.js"
+      request: "write: src/b.js",
+      file: "src/b.js"
     });
     const result = await promise;
 

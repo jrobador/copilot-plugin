@@ -171,7 +171,10 @@ export function createPermissionHandler(mode, onDecision) {
       reason,
       mode: effectiveMode,
       request: describeRequest(request),
-      kind: request?.kind ?? "unknown"
+      kind: request?.kind ?? "unknown",
+      // Structured field for consumers; the `request` string above is display
+      // text, not something to parse back.
+      file: request?.fileName ?? request?.path ?? null
     });
     return decision;
   };

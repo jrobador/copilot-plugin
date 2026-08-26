@@ -12,10 +12,8 @@ import {
     DEFAULT_CONTINUE_PROMPT,
     createSession,
     runPrompt,
-    abortSession,
     getCopilotAvailability,
     getCopilotLoginStatus,
-    getLastSessionId,
     getSessionRuntimeStatus,
     listModels,
     parseStructuredOutput,
@@ -69,7 +67,11 @@ const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
-const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+// Matches the SDK's ReasoningEffort type exactly. The previous set
+// (none, minimal, ...) was inherited from Codex: "minimal" passed our
+// validation and then failed inside the SDK, while "max" -- which the SDK
+// accepts -- was rejected here.
+const VALID_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 // Convenience aliases. Real ids come from `client.listModels()`; these only
 // spare the user from typing an exact version string.
 const MODEL_ALIASES = new Map([
@@ -87,7 +89,7 @@ function printUsage() {
       "  node scripts/copilot-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/copilot-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>]",
       "  node scripts/copilot-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>] [focus text]",
-      "  node scripts/copilot-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/copilot-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <low|medium|high|xhigh|max>] [prompt]",
       "  node scripts/copilot-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/copilot-companion.mjs result [job-id] [--json]",
       "  node scripts/copilot-companion.mjs cancel [job-id] [--json]"
@@ -128,7 +130,7 @@ function normalizeReasoningEffort(effort) {
   }
   if (!VALID_REASONING_EFFORTS.has(normalized)) {
     throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh.`
+      `Unsupported reasoning effort "${effort}". Use one of: low, medium, high, xhigh, max.`
     );
   }
   return normalized;

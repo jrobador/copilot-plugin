@@ -43,6 +43,10 @@ at `4837b0b`, itself a port of OpenAI's Codex plugin for Claude Code.
 - The review event listener was never disposed, leaking one per turn on resumed
   sessions.
 - `resumeSession` falls back to a fresh session when the id has been pruned.
+- `--effort` accepted `none` and `minimal` (Codex's set) and rejected `max`.
+  The SDK's `ReasoningEffort` type is `low | medium | high | xhigh | max`:
+  `minimal` passed our validation only to fail inside the SDK, and `max` was
+  refused despite being valid. The set now matches the SDK exactly.
 
 ### Added
 

@@ -230,9 +230,8 @@ export async function runPrompt(session, prompt, options = {}) {
   const previousSink = sink.current;
   sink.current = (entry) => {
     if (entry.allowed) {
-      if (entry.kind === "write") {
-        const file = entry.request.replace(/^write:\s*/, "");
-        if (file) touchedFiles.add(file);
+      if (entry.kind === "write" && entry.file) {
+        touchedFiles.add(entry.file);
       }
       return;
     }

@@ -45,7 +45,11 @@ A finding should answer:
 </finding_bar>
 
 <structured_output_contract>
-Return only valid JSON matching the provided schema.
+Return only valid JSON matching the schema below. No prose, no code fences
+around it, nothing before or after.
+
+{{OUTPUT_SCHEMA}}
+
 Keep the output compact and specific.
 Use `needs-attention` if there is any material risk worth blocking on.
 Use `approve` only if you cannot support any substantive adversarial finding from the provided context.

@@ -4,16 +4,25 @@ import assert from "node:assert/strict";
 import { FakeCopilotClient } from "./fake-copilot-fixture.mjs";
 import { buildPersistentTaskSessionId, parseStructuredOutput } from "../plugins/copilot/scripts/lib/copilot-client.mjs";
 
+// The session id becomes a directory name under ~/.copilot/session-state/,
+// so it has to be a slug. These assertions previously expected the
+// human-readable "Copilot Companion Task ..." string, which is what Codex calls
+// a thread *name* -- a different concept that survived the port.
 describe("runtime: buildPersistentTaskSessionId", () => {
-  it("returns session ID with task prefix", () => {
+  it("returns a slug carrying the task prefix", () => {
     const id = buildPersistentTaskSessionId("Fix the authentication bug");
-    assert.ok(id.startsWith("Copilot Companion Task"));
-    assert.ok(id.includes("Fix the authentication bug"));
+    assert.ok(id.startsWith("copilot-companion-task"));
+    assert.ok(id.includes("fix-the-authentication-bug"));
+  });
+
+  it("is safe to use as a directory name", () => {
+    const id = buildPersistentTaskSessionId("Fix C:\\path/with spaces & symbols!");
+    assert.match(id, /^[a-z0-9-]+$/);
   });
 
   it("handles empty prompt", () => {
     const id = buildPersistentTaskSessionId("");
-    assert.equal(id, "Copilot Companion Task");
+    assert.equal(id, "copilot-companion-task");
   });
 
   it("shortens long prompts", () => {
@@ -40,6 +49,32 @@ describe("runtime: parseStructuredOutput", () => {
     const result = parseStructuredOutput("");
     assert.equal(result.parsed, null);
     assert.ok(result.parseError);
+  });
+
+  // Models wrap JSON in fences and prose often enough that a bare JSON.parse
+  // rejects output that is otherwise exactly what was asked for.
+  it("unwraps a fenced json block", () => {
+    const raw = '```json\n{"verdict":"approve","summary":"Fine"}\n```';
+    const result = parseStructuredOutput(raw);
+    assert.equal(result.parsed.verdict, "approve");
+    assert.equal(result.parseError, null);
+  });
+
+  it("unwraps an unlabelled fenced block", () => {
+    const result = parseStructuredOutput('```\n{"verdict":"approve"}\n```');
+    assert.equal(result.parsed.verdict, "approve");
+  });
+
+  it("recovers JSON wrapped in prose", () => {
+    const raw = 'Here is the review:\n{"verdict":"needs-attention","findings":[]}\nHope that helps.';
+    const result = parseStructuredOutput(raw);
+    assert.equal(result.parsed.verdict, "needs-attention");
+  });
+
+  it("keeps the raw output when nothing parses", () => {
+    const result = parseStructuredOutput("no json here at all");
+    assert.equal(result.parsed, null);
+    assert.equal(result.rawOutput, "no json here at all");
   });
 });
 

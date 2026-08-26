@@ -5,6 +5,7 @@ import {
   runCommand,
   runCommandChecked,
   binaryAvailable,
+  resolveBinary,
   terminateProcessTree,
   formatCommandFailure
 } from "../plugins/copilot/scripts/lib/process.mjs";
@@ -16,10 +17,42 @@ describe("runCommand", () => {
     assert.match(result.stdout, /hello/);
   });
 
-  it("returns error for missing binary", () => {
+  it("fails for a missing binary", () => {
+    // The shape of the failure is platform-dependent: POSIX surfaces spawn's
+    // ENOENT, while on Windows the command goes through cmd.exe, which reports
+    // a plain non-zero exit. Both must be recognizable as a failure.
     const result = runCommand("nonexistent-binary-xyz");
-    assert.ok(result.error);
-    assert.equal(result.error.code, "ENOENT");
+    assert.ok(result.error || result.status !== 0);
+    if (result.error) {
+      assert.equal(result.error.code, "ENOENT");
+    }
+  });
+});
+
+describe("resolveBinary", () => {
+  it("finds a binary that exists on PATH", () => {
+    assert.ok(resolveBinary("node"));
+  });
+
+  it("returns null for a binary that does not exist", () => {
+    assert.equal(resolveBinary("nonexistent-binary-xyz"), null);
+  });
+
+  it("returns null for an empty command", () => {
+    assert.equal(resolveBinary(""), null);
+  });
+});
+
+describe("binaryAvailable", () => {
+  it("reports a present binary as available", () => {
+    const result = binaryAvailable("node");
+    assert.equal(result.available, true);
+  });
+
+  it("reports a missing binary as not found, whatever the shell language", () => {
+    const result = binaryAvailable("nonexistent-binary-xyz");
+    assert.equal(result.available, false);
+    assert.equal(result.detail, "not found");
   });
 });
 

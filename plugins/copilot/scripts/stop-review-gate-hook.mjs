@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { getCopilotLoginStatus } from "./lib/copilot-client.mjs";
+import { getCopilotAvailability } from "./lib/copilot-client.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { getConfig, listJobs } from "./lib/state.mjs";
 import { sortJobsNewestFirst } from "./lib/job-control.mjs";
@@ -56,8 +56,16 @@ function buildStopReviewPrompt(input = {}) {
   });
 }
 
+/**
+ * Cheap availability probe.
+ *
+ * This runs on every Stop, so it deliberately checks the binary rather than
+ * calling getCopilotLoginStatus(), which would boot a Copilot CLI process just
+ * to answer a yes/no question. A real auth failure surfaces from the review run
+ * itself a moment later.
+ */
 function buildSetupNote(cwd) {
-  const copilotStatus = getCopilotLoginStatus(cwd);
+  const copilotStatus = getCopilotAvailability(cwd);
   if (!copilotStatus.available) {
     const detail = copilotStatus.detail ? ` ${copilotStatus.detail}.` : "";
     return `Copilot is not installed for the review gate.${detail} Run /copilot:setup to install it.`;

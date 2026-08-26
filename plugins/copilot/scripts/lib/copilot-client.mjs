@@ -1,11 +1,27 @@
-import { binaryAvailable, runCommand } from "./process.mjs";
+/**
+ * Thin wrapper over @github/copilot-sdk.
+ *
+ * The SDK drives the Copilot CLI over JSON-RPC, which is the same shape as the
+ * `codex app-server` the Codex plugin talks to. One client per workspace root;
+ * sessions are created against it.
+ */
+
+import { binaryAvailable } from "./process.mjs";
+import { createPermissionHandler, normalizeMode, READ_ONLY, WORKSPACE_WRITE } from "./permissions.mjs";
 
 const SESSION_ID_ENV = "COPILOT_COMPANION_SESSION_ID";
 const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
 const TASK_SESSION_PREFIX = "Copilot Companion Task";
+const CLIENT_NAME = "copilot-plugin-cc";
 
-let _client = null;
+const MODE = Symbol("permissionMode");
+
+/** Routes permission decisions into the turn currently running on a session. */
+export const DECISION_SINK = Symbol.for("copilot-plugin-cc.decisionSink");
+
+/** One client per working directory. The SDK spawns a CLI process per client. */
+const clients = new Map();
 
 function shorten(text, limit = 72) {
   const normalized = String(text ?? "").trim().replace(/\s+/g, " ");
@@ -14,63 +30,150 @@ function shorten(text, limit = 72) {
   return `${normalized.slice(0, limit - 3)}...`;
 }
 
-async function getCopilotClient() {
-  // Lazy import to allow tests to run without the real SDK installed
-  const { CopilotClient } = await import("@github/copilot-sdk");
-  return CopilotClient;
-}
-
-export async function ensureClient() {
-  if (!_client) {
-    const CopilotClient = await getCopilotClient();
-    _client = new CopilotClient();
-    await _client.start();
-  }
-  return _client;
-}
-
-export async function shutdownClient() {
-  if (_client) {
-    await _client.stop();
-    _client = null;
+async function loadSdk() {
+  try {
+    return await import("@github/copilot-sdk");
+  } catch (error) {
+    const hint =
+      "The @github/copilot-sdk package is not installed. Run `/copilot:setup`, or install it with `npm install @github/copilot-sdk`.";
+    throw Object.assign(new Error(`${hint} (${error.message})`), { code: "SDK_MISSING" });
   }
 }
 
-export async function createSession(options = {}) {
-  const client = await ensureClient();
-  return client.createSession({
-    model: options.model || undefined,
-    streaming: true,
-    sessionId: options.sessionId || undefined,
-    systemMessage: options.systemMessage || undefined,
-    tools: options.tools || undefined,
-    onPermissionRequest: async () => ({ kind: "approved" }),
-    ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {})
+export async function ensureClient(cwd = process.cwd(), options = {}) {
+  const existing = clients.get(cwd);
+  if (existing) return existing;
+
+  const { CopilotClient } = await loadSdk();
+  const client = new CopilotClient({
+    workingDirectory: cwd,
+    logLevel: options.logLevel ?? "error"
   });
+  await client.start();
+  clients.set(cwd, client);
+  return client;
 }
 
+export async function shutdownClient(cwd) {
+  const keys = cwd ? [cwd] : [...clients.keys()];
+  for (const key of keys) {
+    const client = clients.get(key);
+    if (!client) continue;
+    clients.delete(key);
+    try {
+      await client.stop();
+    } catch {
+      await client.forceStop?.().catch(() => {});
+    }
+  }
+}
+
+function buildSessionConfig(options, permissionMode, sink) {
+  const config = {
+    clientName: CLIENT_NAME,
+    // The handler is bound once, at session creation, but each turn needs its
+    // own record of what was denied. `sink.current` is swapped per turn by
+    // runPrompt, so the long-lived handler always reaches the running turn.
+    onPermissionRequest: createPermissionHandler(permissionMode, (entry) => {
+      options.onPermissionDecision?.(entry);
+      sink.current?.(entry);
+    }),
+    // Touched files are reported back to the user, so track them.
+    enableFileChangeTracking: permissionMode === WORKSPACE_WRITE
+  };
+
+  if (options.model) config.model = options.model;
+  if (options.reasoningEffort) config.reasoningEffort = options.reasoningEffort;
+  if (options.systemMessage) config.systemMessage = options.systemMessage;
+  if (options.availableTools) config.availableTools = options.availableTools;
+  if (options.excludedTools) config.excludedTools = options.excludedTools;
+
+  return config;
+}
+
+/**
+ * @param {object} options
+ * @param {string} [options.cwd]              Workspace root the job is scoped to.
+ * @param {string} [options.model]            Model id; see listModels().
+ * @param {string} [options.reasoningEffort]  Only for models that support it.
+ * @param {string} [options.sessionId]        Set to make the session resumable.
+ * @param {string} [options.permissionMode]   READ_ONLY (default) or WORKSPACE_WRITE.
+ * @param {Function} [options.onPermissionDecision]  Observer for allow/deny logging.
+ */
+export async function createSession(options = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  const permissionMode = normalizeMode(options.permissionMode);
+  const client = await ensureClient(cwd, options);
+
+  const sink = { current: null };
+  const config = buildSessionConfig(options, permissionMode, sink);
+  if (options.sessionId) config.sessionId = options.sessionId;
+
+  const session = await client.createSession(config);
+  session[MODE] = permissionMode;
+  session[DECISION_SINK] = sink;
+  return session;
+}
+
+/**
+ * Resume a previous session by id, falling back to a fresh one when the id is
+ * unknown (the CLI prunes old session state).
+ */
+export async function resumeSession(sessionId, options = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  const permissionMode = normalizeMode(options.permissionMode);
+  const client = await ensureClient(cwd, options);
+
+  const sink = { current: null };
+  try {
+    const session = await client.resumeSession(
+      sessionId,
+      buildSessionConfig(options, permissionMode, sink)
+    );
+    session[MODE] = permissionMode;
+    session[DECISION_SINK] = sink;
+    return { session, resumed: true };
+  } catch {
+    const session = await createSession({ ...options, cwd, sessionId, permissionMode });
+    return { session, resumed: false };
+  }
+}
+
+/** The id of the most recent session the CLI recorded, or null. */
+export async function getLastSessionId(cwd = process.cwd()) {
+  try {
+    const client = await ensureClient(cwd);
+    return (await client.getLastSessionId()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Send one prompt and wait for the turn to finish, streaming progress out.
+ *
+ * `session.on()` returns an unsubscribe function; it is called on the way out
+ * so a resumed session does not accumulate a listener per turn.
+ */
 export async function runPrompt(session, prompt, options = {}) {
-  const { onProgress } = options;
+  const { onProgress, attachments, agentMode, timeout } = options;
   const chunks = [];
   const reasoning = [];
+  const toolCalls = [];
+  const denials = [];
+  const touchedFiles = new Set();
 
-  session.on((event) => {
+  const unsubscribe = session.on((event) => {
     const eventType = event.type?.value ?? event.type;
     switch (eventType) {
       case "assistant.message_delta":
         chunks.push(event.data.deltaContent || "");
-        onProgress?.({
-          message: `Streaming response...`,
-          phase: "running",
-          stderrMessage: null,
-          logTitle: null,
-          logBody: null
-        });
         break;
       case "assistant.reasoning_delta":
         reasoning.push(event.data.deltaContent || "");
         break;
       case "tool.execution_start":
+        toolCalls.push(event.data.toolName);
         onProgress?.({
           message: `Running tool: ${event.data.toolName}.`,
           phase: "investigating",
@@ -104,25 +207,64 @@ export async function runPrompt(session, prompt, options = {}) {
     }
   });
 
-  const response = await session.sendAndWait({ prompt });
-  const content = response?.data?.content ?? chunks.join("");
-
-  return {
-    content,
-    reasoning: reasoning.join(""),
-    sessionId: session.config?.sessionId ?? null
+  // The permission handler was bound at session creation; route its decisions
+  // into this turn's record so denials surface in the job output.
+  const sink = session[DECISION_SINK] ?? { current: null };
+  const previousSink = sink.current;
+  sink.current = (entry) => {
+    if (entry.allowed) {
+      if (entry.kind === "write") {
+        const file = entry.request.replace(/^write:\s*/, "");
+        if (file) touchedFiles.add(file);
+      }
+      return;
+    }
+    denials.push(entry);
+    onProgress?.({
+      message: `Denied ${entry.kind} request.`,
+      phase: "running",
+      stderrMessage: `Denied ${entry.request} (${entry.mode})`,
+      logTitle: "Permission denied",
+      logBody: entry.reason
+    });
   };
+
+  try {
+    const message = attachments?.length || agentMode ? { prompt, attachments, agentMode } : prompt;
+    const response = await session.sendAndWait(message, timeout);
+    const content = response?.data?.content ?? chunks.join("");
+
+    return {
+      content,
+      reasoning: reasoning.join("") || (response?.data?.reasoningText ?? ""),
+      sessionId: session.sessionId ?? null,
+      model: response?.data?.model ?? null,
+      outputTokens: response?.data?.outputTokens ?? null,
+      toolCalls,
+      denials,
+      touchedFiles: [...touchedFiles]
+    };
+  } finally {
+    unsubscribe?.();
+    sink.current = previousSink;
+  }
 }
 
 export async function abortSession(session) {
-  await session.abort();
+  if (!session) return;
+  try {
+    await session.abort();
+  } catch {
+    // The turn may already be over; disconnecting is enough.
+  }
+  await session.disconnect?.().catch(() => {});
 }
 
 export function getCopilotAvailability(cwd) {
   return binaryAvailable("copilot", ["--version"], { cwd });
 }
 
-export function getSessionRuntimeStatus(env = process.env) {
+export function getSessionRuntimeStatus() {
   return {
     mode: "sdk",
     label: "SDK managed",
@@ -130,28 +272,108 @@ export function getSessionRuntimeStatus(env = process.env) {
   };
 }
 
-export function getCopilotLoginStatus(cwd) {
-  const availability = getCopilotAvailability(cwd);
-  if (!availability.available) {
-    return { available: false, loggedIn: false, detail: availability.detail };
+/**
+ * Real authentication status.
+ *
+ * Upstream returned a hardcoded `loggedIn: true` with the detail string
+ * "assumed authenticated", so `/copilot:setup` reported success on a machine
+ * that had never logged in. The SDK answers this properly.
+ */
+export async function getCopilotLoginStatus(cwd = process.cwd()) {
+  let client;
+  try {
+    client = await ensureClient(cwd);
+  } catch (error) {
+    return {
+      available: false,
+      loggedIn: false,
+      detail:
+        error.code === "SDK_MISSING"
+          ? "@github/copilot-sdk is not installed."
+          : `Could not start the Copilot runtime: ${error.message}`,
+      authType: null,
+      login: null,
+      host: null
+    };
   }
-  return { available: true, loggedIn: true, detail: "assumed authenticated" };
+
+  try {
+    const status = await client.getAuthStatus();
+    return {
+      available: true,
+      loggedIn: Boolean(status?.isAuthenticated),
+      detail:
+        status?.statusMessage ?? (status?.isAuthenticated ? "authenticated" : "not authenticated"),
+      authType: status?.authType ?? null,
+      login: status?.login ?? null,
+      host: status?.host ?? null
+    };
+  } catch (error) {
+    return {
+      available: true,
+      loggedIn: false,
+      detail: `Could not read authentication status: ${error.message}`,
+      authType: null,
+      login: null,
+      host: null
+    };
+  }
 }
 
+/** Models this account can actually use. */
+export async function listModels(cwd = process.cwd()) {
+  try {
+    const client = await ensureClient(cwd);
+    const models = await client.listModels();
+    return Array.isArray(models) ? models : [];
+  } catch {
+    return [];
+  }
+}
+
+function* jsonCandidates(rawOutput) {
+  const text = String(rawOutput).trim();
+  yield text;
+
+  const fenced = text.match(/```(?:json)?\s*\n([\s\S]*?)\n?```/i);
+  if (fenced) yield fenced[1].trim();
+
+  // Last resort: the outermost brace pair, for prose wrapped around JSON.
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first !== -1 && last > first) yield text.slice(first, last + 1);
+}
+
+/**
+ * Parse a JSON payload out of a model's final message.
+ *
+ * Models wrap JSON in fenced code blocks often enough that a bare JSON.parse
+ * throws on output that is otherwise perfectly good, so unwrap before parsing.
+ */
 export function parseStructuredOutput(rawOutput, fallback = {}) {
   if (!rawOutput) {
     return {
       parsed: null,
-      parseError: fallback.failureMessage ?? "Copilot did not return a final structured message.",
+      parseError: fallback.failureMessage || "Copilot did not return a final structured message.",
       rawOutput: rawOutput ?? "",
       ...fallback
     };
   }
-  try {
-    return { parsed: JSON.parse(rawOutput), parseError: null, rawOutput, ...fallback };
-  } catch (error) {
-    return { parsed: null, parseError: error.message, rawOutput, ...fallback };
+
+  for (const candidate of jsonCandidates(rawOutput)) {
+    try {
+      return { parsed: JSON.parse(candidate), parseError: null, rawOutput, ...fallback };
+    } catch {
+      // Try the next candidate.
+    }
   }
+
+  return {
+    parsed: null,
+    parseError: "Copilot's final message was not valid JSON.",
+    rawOutput,
+    ...fallback
+  };
 }
 
 export function buildPersistentTaskSessionId(prompt) {
@@ -163,4 +385,4 @@ export function buildPersistentTaskSessionId(prompt) {
   return slug ? `${prefix}-${slug}` : prefix;
 }
 
-export { DEFAULT_CONTINUE_PROMPT, TASK_SESSION_PREFIX, SESSION_ID_ENV };
+export { DEFAULT_CONTINUE_PROMPT, TASK_SESSION_PREFIX, SESSION_ID_ENV, READ_ONLY, WORKSPACE_WRITE };

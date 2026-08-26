@@ -15,8 +15,14 @@ import {
     abortSession,
     getCopilotAvailability,
     getCopilotLoginStatus,
+    getLastSessionId,
     getSessionRuntimeStatus,
-    parseStructuredOutput
+    listModels,
+    parseStructuredOutput,
+    READ_ONLY,
+    resumeSession,
+    shutdownClient,
+    WORKSPACE_WRITE
   } from "./lib/copilot-client.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
@@ -64,9 +70,13 @@ const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json"
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+// Convenience aliases. Real ids come from `client.listModels()`; these only
+// spare the user from typing an exact version string.
 const MODEL_ALIASES = new Map([
   ["codex", "gpt-5.3-codex"],
-  ["gemini", "gemini-3.1-pro"]
+  ["gemini", "gemini-3.1-pro-preview"],
+  ["sonnet", "claude-sonnet-5"],
+  ["opus", "claude-opus-5"]
 ]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
@@ -176,17 +186,18 @@ function firstMeaningfulLine(text, fallback) {
   return line ?? fallback;
 }
 
-function buildSetupReport(cwd, actionsTaken = []) {
+async function buildSetupReport(cwd, actionsTaken = []) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
   const copilotStatus = getCopilotAvailability(cwd);
-  const authStatus = getCopilotLoginStatus(cwd);
+  const authStatus = await getCopilotLoginStatus(cwd);
   const config = getConfig(workspaceRoot);
+  const models = authStatus.loggedIn ? await listModels(cwd) : [];
 
   const nextSteps = [];
   if (!copilotStatus.available) {
-    nextSteps.push("Install Copilot CLI with `npm install -g @github/copilot-cli`.");
+    nextSteps.push("Install the Copilot CLI with `npm install -g @github/copilot`.");
   }
   if (copilotStatus.available && !authStatus.loggedIn) {
     nextSteps.push("Run `!copilot login`.");
@@ -203,13 +214,14 @@ function buildSetupReport(cwd, actionsTaken = []) {
     copilot: copilotStatus,
     auth: authStatus,
     sessionRuntime: getSessionRuntimeStatus(),
+    models: models.map((model) => model.id ?? model.name).filter(Boolean),
     reviewGateEnabled: Boolean(config.stopReviewGate),
     actionsTaken,
     nextSteps
   };
 }
 
-function handleSetup(argv) {
+async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
     booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
@@ -231,25 +243,39 @@ function handleSetup(argv) {
     actionsTaken.push(`Disabled the stop-time review gate for ${workspaceRoot}.`);
   }
 
-  const finalReport = buildSetupReport(cwd, actionsTaken);
+  const finalReport = await buildSetupReport(cwd, actionsTaken);
   outputResult(options.json ? finalReport : renderSetupReport(finalReport), options.json);
 }
 
-function buildAdversarialReviewPrompt(context, focusText) {
-  const template = loadPromptTemplate(ROOT_DIR, "adversarial-review");
+/**
+ * Both review prompts declare a JSON output contract. The schema file is the
+ * single source of that contract, so inject it rather than describing it twice
+ * (upstream referred to "the provided schema" but never provided it).
+ */
+function buildReviewPrompt(templateName, { reviewName, context, focusText }) {
+  const template = loadPromptTemplate(ROOT_DIR, templateName);
   return interpolateTemplate(template, {
-    REVIEW_KIND: "Adversarial Review",
+    REVIEW_KIND: reviewName,
     TARGET_LABEL: context.target.label,
     USER_FOCUS: focusText || "No extra focus provided.",
+    OUTPUT_SCHEMA: fs.readFileSync(REVIEW_SCHEMA, "utf8").trim(),
     REVIEW_INPUT: context.content
   });
 }
 
-function ensureCopilotReady(cwd) {
-  const authStatus = getCopilotLoginStatus(cwd);
+async function ensureCopilotReady(cwd) {
+  const authStatus = await getCopilotLoginStatus(cwd);
   if (!authStatus.available) {
-    throw new Error("Copilot CLI is not installed or is missing required runtime support. Install it with `npm install -g @github/copilot-cli`, then rerun `/copilot:setup`.");
+    throw new Error(
+      "The Copilot runtime is unavailable. Install it with `npm install -g @github/copilot`, then rerun `/copilot:setup`."
+    );
   }
+  if (!authStatus.loggedIn) {
+    throw new Error(
+      `Copilot is not authenticated (${authStatus.detail}). Run \`!copilot login\`, then rerun \`/copilot:setup\`.`
+    );
+  }
+  return authStatus;
 }
 
 function renderStatusPayload(report, asJson) {
@@ -294,7 +320,7 @@ async function resolveLatestTrackedTaskSession(workspaceRoot, options = {}) {
 }
 
 async function executeReviewRun(request) {
-  ensureCopilotReady(request.cwd);
+  await ensureCopilotReady(request.cwd);
   ensureGitRepository(request.cwd);
 
   const target = resolveReviewTarget(request.cwd, {
@@ -304,30 +330,37 @@ async function executeReviewRun(request) {
   const focusText = request.focusText?.trim() ?? "";
   const reviewName = request.reviewName ?? "Review";
   const context = collectReviewContext(request.cwd, target);
+  const isAdversarial = reviewName === "Adversarial Review";
 
-  let prompt;
-  let isStructured = false;
-  if (reviewName === "Adversarial Review") {
-    prompt = buildAdversarialReviewPrompt(context, focusText);
-    isStructured = true;
-  } else {
-    // Regular review: plain prompt with diff context
-    prompt = [
-      `Please review the following ${target.label} diff and provide a code review.`,
-      focusText ? `Focus on: ${focusText}` : "",
-      "",
-      context.content
-    ].filter(Boolean).join("\n");
-  }
-
-  const session = await createSession({
-    model: request.model,
-    systemMessage: isStructured
-      ? "You are Copilot performing an adversarial software review. Return your findings as JSON matching the provided schema."
-      : "You are Copilot performing a code review. Provide clear, actionable feedback."
+  // Both reviews are structured. Upstream left the plain review as a one-line
+  // prompt with no schema, which made its output impossible to render or sort
+  // by severity the way the review commands promise.
+  const isStructured = true;
+  const prompt = buildReviewPrompt(isAdversarial ? "adversarial-review" : "review", {
+    reviewName,
+    context,
+    focusText
   });
 
-  const result = await runPrompt(session, prompt, { onProgress: request.onProgress });
+  const session = await createSession({
+    cwd: context.repoRoot,
+    model: request.model,
+    reasoningEffort: request.effort,
+    // A review never edits. This is enforced by the permission handler, not by
+    // asking the model nicely.
+    permissionMode: READ_ONLY,
+    systemMessage: isAdversarial
+      ? "You are Copilot performing an adversarial software review. Return your findings as JSON matching the provided schema."
+      : "You are Copilot performing a code review. Return your findings as JSON matching the provided schema."
+  });
+
+  const result = await runPrompt(session, prompt, {
+    onProgress: request.onProgress,
+    // Attaching the repo root lets Copilot open the files around the diff
+    // instead of reasoning only about the hunks pasted into the prompt.
+    attachments: [{ type: "directory", path: context.repoRoot, displayName: "repository" }],
+    agentMode: "plan"
+  });
   const rawOutput = result.content ?? "";
 
   if (isStructured) {
@@ -397,7 +430,7 @@ async function executeReviewRun(request) {
 
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
-  ensureCopilotReady(request.cwd);
+  await ensureCopilotReady(request.cwd);
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
@@ -421,10 +454,38 @@ async function executeTaskRun(request) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
   }
 
-  const session = await createSession({
-    model: request.model,
-    sessionId
-  });
+  // `--write` decides whether Copilot may edit the tree. Upstream parsed the
+  // flag, stored it on the job record, printed it in the report, and never
+  // passed it to the session, so every task ran with blanket approval.
+  const permissionMode = request.write ? WORKSPACE_WRITE : READ_ONLY;
+
+  const { session, resumed } = request.resumeLast
+    ? await resumeSession(sessionId, {
+        cwd: request.cwd,
+        model: request.model,
+        reasoningEffort: request.effort,
+        permissionMode
+      })
+    : {
+        session: await createSession({
+          cwd: request.cwd,
+          model: request.model,
+          reasoningEffort: request.effort,
+          permissionMode,
+          sessionId
+        }),
+        resumed: false
+      };
+
+  if (request.resumeLast && !resumed) {
+    request.onProgress?.({
+      message: "Previous session could not be resumed; started a fresh one.",
+      phase: "starting",
+      stderrMessage: `Session ${sessionId} was not resumable; started fresh.`,
+      logTitle: null,
+      logBody: null
+    });
+  }
 
   const promptText = request.prompt || DEFAULT_CONTINUE_PROMPT;
   const result = await runPrompt(session, promptText, { onProgress: request.onProgress });
@@ -691,7 +752,7 @@ async function handleTask(argv) {
   });
 
   if (options.background) {
-    ensureCopilotReady(cwd);
+    await ensureCopilotReady(cwd);
     requireTaskRequest(prompt, resumeLast);
 
     const job = buildTaskJob(workspaceRoot, taskMetadata, write);
@@ -916,7 +977,7 @@ async function main() {
 
   switch (subcommand) {
     case "setup":
-      handleSetup(argv);
+      await handleSetup(argv);
       break;
     case "review":
       await handleReview(argv);
@@ -949,13 +1010,22 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  const isAuthError = /auth|login|unauthenticated|unauthorized|not signed in|credentials/i.test(message);
-  if (isAuthError) {
-    process.stderr.write(`Copilot authentication failed. Run \`!copilot login\` to authenticate and retry.\n`);
-  } else {
-    process.stderr.write(`${message}\n`);
-  }
-  process.exitCode = 1;
-});
+main()
+  .finally(async () => {
+    // The SDK keeps a Copilot CLI child process alive; without this the
+    // companion process never exits and every slash command appears to hang.
+    await shutdownClient().catch(() => {});
+  })
+  .catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const isAuthError =
+      /auth|login|unauthenticated|unauthorized|not signed in|credentials/i.test(message);
+    if (isAuthError) {
+      process.stderr.write(
+        "Copilot authentication failed. Run `!copilot login` to authenticate and retry.\n"
+      );
+    } else {
+      process.stderr.write(`${message}\n`);
+    }
+    process.exitCode = 1;
+  });

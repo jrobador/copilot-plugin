@@ -1,2 +1,6 @@
 node_modules/
 .claude/settings.local.json
+
+# scratch
+*.log
+.DS_Store

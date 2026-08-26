@@ -1,6 +1,6 @@
 ---
 description: Run a Copilot review that challenges the implementation approach and design choices
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [focus ...]'
+argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--effort <level>] [focus ...]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
@@ -43,6 +43,13 @@ Argument handling:
 - It supports working-tree review, branch review, and `--base <ref>`.
 - It does not support `--scope staged` or `--scope unstaged`.
 - Unlike `/copilot:review`, it can still take extra focus text after the flags.
+- `--model` picks which model reviews the code. Leave it unset unless the user asks for one. Aliases: `opus`, `sonnet`, `codex`, `gemini`. Run `/copilot:setup` to list what the account can use.
+- `--effort` sets reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) on models that support it. Leave it unset unless the user asks.
+- `--model` and `--effort` are runtime controls. Do not treat them as part of the user's focus text.
+
+The review runs read-only. Copilot may read the repository and run commands the
+runtime classifies as read-only; writes, network access and anything else are
+refused by the plugin, not merely discouraged in the prompt.
 
 Foreground flow:
 - Run:

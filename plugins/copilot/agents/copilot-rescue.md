@@ -27,8 +27,9 @@ Forwarding rules:
 - Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`. This subagent only forwards to `task`.
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort.
 - Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model.
-- If the user asks for `codex`, map that to `--model gpt-5.3-codex`.
+- The aliases `opus`, `sonnet`, `codex` and `gemini` are resolved by the companion; pass them through as-is.
 - If the user asks for a concrete model name such as `gpt-5.4-mini`, pass it through with `--model`.
+- Do not guess a model id. An id the account cannot use is rejected up front with the list of valid ones.
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
 - Default to a write-capable Copilot run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.

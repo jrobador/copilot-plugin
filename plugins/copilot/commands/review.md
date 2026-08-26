@@ -1,6 +1,6 @@
 ---
 description: Run a Copilot code review against local git state
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]'
+argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--effort <level>]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
@@ -36,8 +36,14 @@ Argument handling:
 - Do not strip `--wait` or `--background` yourself.
 - Do not add extra review instructions or rewrite the user's intent.
 - The companion script parses `--wait` and `--background`, but Claude Code's `Bash(..., run_in_background: true)` is what actually detaches the run.
-- `/copilot:review` is native-review only. It does not support staged-only review, unstaged-only review, or extra focus text.
+- `/copilot:review` does not support staged-only review, unstaged-only review, or extra focus text.
 - If the user needs custom review instructions or more adversarial framing, they should use `/copilot:adversarial-review`.
+- `--model` picks which model reviews the code. Leave it unset unless the user asks for one. Aliases: `opus`, `sonnet`, `codex`, `gemini`. Run `/copilot:setup` to list what the account can use.
+- `--effort` sets reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) on models that support it. Leave it unset unless the user asks.
+
+The review runs read-only. Copilot may read the repository and run commands the
+runtime classifies as read-only; writes, network access and anything else are
+refused by the plugin, not merely discouraged in the prompt.
 
 Foreground flow:
 - Run:

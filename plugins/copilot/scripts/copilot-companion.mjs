@@ -85,9 +85,9 @@ function printUsage() {
     [
       "Usage:",
       "  node scripts/copilot-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
-      "  node scripts/copilot-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
-      "  node scripts/copilot-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/copilot-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|codex|gemini>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/copilot-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>]",
+      "  node scripts/copilot-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>] [focus text]",
+      "  node scripts/copilot-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/copilot-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/copilot-companion.mjs result [job-id] [--json]",
       "  node scripts/copilot-companion.mjs cancel [job-id] [--json]"
@@ -201,7 +201,9 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   }
   if (copilotStatus.available && !authStatus.loggedIn) {
     nextSteps.push("Run `!copilot login`.");
-    nextSteps.push("If browser login is blocked, retry with `!copilot login --device-auth` or `!copilot login --with-api-key`.");
+    nextSteps.push(
+      "If browser login is blocked, retry with `!copilot login --device-code` or `!copilot login --with-token`."
+    );
   }
   if (!config.stopReviewGate) {
     nextSteps.push("Optional: run `/copilot:setup --enable-review-gate` to require a fresh review before stop.");
@@ -278,6 +280,31 @@ async function ensureCopilotReady(cwd) {
   return authStatus;
 }
 
+/**
+ * Fail early on a model this account cannot use.
+ *
+ * Without this the session starts, the turn runs, and the failure surfaces from
+ * deep inside the SDK with no hint about which ids are valid. The account's own
+ * model list is the answer, so show it.
+ */
+async function ensureModelAvailable(cwd, model) {
+  if (!model) return;
+
+  const models = await listModels(cwd);
+  if (models.length === 0) return; // Could not enumerate; let the run decide.
+
+  const ids = models.map((entry) => entry.id ?? entry.name).filter(Boolean);
+  if (ids.includes(model)) return;
+
+  throw new Error(
+    [
+      `Model "${model}" is not available on this account.`,
+      `Available models: ${ids.join(", ")}.`,
+      `Aliases: ${[...MODEL_ALIASES.keys()].join(", ")}.`
+    ].join("\n")
+  );
+}
+
 function renderStatusPayload(report, asJson) {
   return asJson ? report : renderStatusReport(report);
 }
@@ -321,6 +348,7 @@ async function resolveLatestTrackedTaskSession(workspaceRoot, options = {}) {
 
 async function executeReviewRun(request) {
   await ensureCopilotReady(request.cwd);
+  await ensureModelAvailable(request.cwd, request.model);
   ensureGitRepository(request.cwd);
 
   const target = resolveReviewTarget(request.cwd, {
@@ -431,6 +459,7 @@ async function executeReviewRun(request) {
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
   await ensureCopilotReady(request.cwd);
+  await ensureModelAvailable(request.cwd, request.model);
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
@@ -679,13 +708,15 @@ function enqueueBackgroundTask(cwd, job, request) {
 
 async function handleReviewCommand(argv, config) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["base", "scope", "model", "cwd"],
+    valueOptions: ["base", "scope", "model", "effort", "cwd"],
     booleanOptions: ["json", "background", "wait"],
     aliasMap: {
       m: "model"
     }
   });
 
+  const model = normalizeRequestedModel(options.model);
+  const effort = normalizeReasoningEffort(options.effort);
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const focusText = positionals.join(" ").trim();
@@ -710,7 +741,8 @@ async function handleReviewCommand(argv, config) {
         cwd,
         base: options.base,
         scope: options.scope,
-        model: options.model,
+        model,
+        effort,
         focusText,
         reviewName: config.reviewName,
         onProgress: progress

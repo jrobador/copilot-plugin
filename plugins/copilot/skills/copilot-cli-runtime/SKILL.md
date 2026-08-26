@@ -20,13 +20,13 @@ Execution rules:
 - That prompt drafting is the only Claude-side work allowed. Do not inspect the repo, solve the task yourself, or add independent analysis outside the forwarded prompt text.
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
-- Map `codex` to `--model gpt-5.3-codex`.
+- Pass aliases (`opus`, `sonnet`, `codex`, `gemini`) through unchanged; the companion resolves them.
 - Default to a write-capable Copilot run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
-- If the forwarded request includes `--model`, normalize `codex` to `gpt-5.3-codex` and pass it through to `task`.
+- If the forwarded request includes `--model`, pass it through to `task` verbatim.
 - If the forwarded request includes `--effort`, pass it through to `task`.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
@@ -36,9 +36,9 @@ Command selection:
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
 
 Available models:
-- GPT-5.4
-- GPT-5.3-Codex
-- Gemini 3.1 Pro
+- Do not carry a hardcoded list. The set depends on the account's entitlements
+  and changes over time; `/copilot:setup` prints the current one.
+- Aliases resolved by the companion: `opus`, `sonnet`, `codex`, `gemini`.
 
 Safety rules:
 - Default to write-capable Copilot work in `copilot:copilot-rescue` unless the user explicitly asks for read-only behavior.

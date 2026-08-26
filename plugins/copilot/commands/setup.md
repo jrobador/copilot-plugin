@@ -19,7 +19,7 @@ If the result says Copilot is unavailable and npm is available:
 - If the user chooses install, run:
 
 ```bash
-npm install -g @github/copilot-cli
+npm install -g @github/copilot
 ```
 
 - Then rerun:

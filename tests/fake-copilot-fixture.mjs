@@ -10,12 +10,19 @@ export class FakeCopilotSession {
     this.aborted = false;
     this.disconnected = false;
     this.messages = [];
+    // The real session exposes the id as a property, not under config.
+    this.sessionId = config.sessionId ?? "fake-session";
     this._cannedResponse = config._cannedResponse ?? { data: { content: "Mock response" } };
     this._cannedEvents = config._cannedEvents ?? [];
   }
 
+  /** Mirrors the SDK: returns an unsubscribe function. */
   on(handler) {
     this.listeners.push(handler);
+    return () => {
+      const index = this.listeners.indexOf(handler);
+      if (index !== -1) this.listeners.splice(index, 1);
+    };
   }
 
   _emit(event) {

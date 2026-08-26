@@ -6,6 +6,8 @@
  * sessions are created against it.
  */
 
+import { createRequire } from "node:module";
+
 import { binaryAvailable } from "./process.mjs";
 import { createPermissionHandler, normalizeMode, READ_ONLY, WORKSPACE_WRITE } from "./permissions.mjs";
 
@@ -14,6 +16,13 @@ const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
 const TASK_SESSION_PREFIX = "Copilot Companion Task";
 const CLIENT_NAME = "copilot-plugin-cc";
+
+/**
+ * The SDK's sendAndWait default is 60s, which a multi-file review blows through
+ * long before it finishes. The timeout only stops us waiting -- it does not
+ * abort the agent -- so a short one strands work that is still running.
+ */
+const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 
 const MODE = Symbol("permissionMode");
 
@@ -162,6 +171,9 @@ export async function runPrompt(session, prompt, options = {}) {
   const toolCalls = [];
   const denials = [];
   const touchedFiles = new Set();
+  // tool.execution_complete carries only a toolCallId, never the tool name,
+  // so remember what each id was called when it started.
+  const toolNames = new Map();
 
   const unsubscribe = session.on((event) => {
     const eventType = event.type?.value ?? event.type;
@@ -172,22 +184,27 @@ export async function runPrompt(session, prompt, options = {}) {
       case "assistant.reasoning_delta":
         reasoning.push(event.data.deltaContent || "");
         break;
-      case "tool.execution_start":
-        toolCalls.push(event.data.toolName);
+      case "tool.execution_start": {
+        const name = event.data.toolName;
+        toolCalls.push(name);
+        toolNames.set(event.data.toolCallId, name);
         onProgress?.({
-          message: `Running tool: ${event.data.toolName}.`,
+          message: `Running tool: ${name}.`,
           phase: "investigating",
-          stderrMessage: `Running tool: ${event.data.toolName}`,
+          stderrMessage: `Running tool: ${name}`,
           logTitle: null,
           logBody: null
         });
         break;
+      }
       case "tool.execution_complete": {
+        const name = toolNames.get(event.data.toolCallId) ?? "tool";
+        toolNames.delete(event.data.toolCallId);
         const status = event.data.success ? "completed" : "failed";
         onProgress?.({
-          message: `Tool ${event.data.toolName} ${status}.`,
+          message: `Tool ${name} ${status}.`,
           phase: "running",
-          stderrMessage: `Tool ${event.data.toolName} ${status}`,
+          stderrMessage: `Tool ${name} ${status}`,
           logTitle: null,
           logBody: null
         });
@@ -231,7 +248,7 @@ export async function runPrompt(session, prompt, options = {}) {
 
   try {
     const message = attachments?.length || agentMode ? { prompt, attachments, agentMode } : prompt;
-    const response = await session.sendAndWait(message, timeout);
+    const response = await session.sendAndWait(message, timeout ?? DEFAULT_TURN_TIMEOUT_MS);
     const content = response?.data?.content ?? chunks.join("");
 
     return {
@@ -260,8 +277,31 @@ export async function abortSession(session) {
   await session.disconnect?.().catch(() => {});
 }
 
+/**
+ * Is a Copilot CLI available to run?
+ *
+ * The SDK depends on @github/copilot, so installing the SDK already brings a
+ * CLI with it and no global install is needed. Checking only the PATH (what
+ * upstream did) reported "not found" on a working setup and blocked every
+ * command behind an install step the user did not need.
+ */
 export function getCopilotAvailability(cwd) {
-  return binaryAvailable("copilot", ["--version"], { cwd });
+  const onPath = binaryAvailable("copilot", ["--version"], { cwd });
+  if (onPath.available) {
+    return { ...onPath, source: "path" };
+  }
+
+  try {
+    const require = createRequire(import.meta.url);
+    const manifest = require("@github/copilot/package.json");
+    return {
+      available: true,
+      detail: `GitHub Copilot CLI ${manifest.version} (bundled with @github/copilot-sdk)`,
+      source: "bundled"
+    };
+  } catch {
+    return { ...onPath, source: null };
+  }
 }
 
 export function getSessionRuntimeStatus() {

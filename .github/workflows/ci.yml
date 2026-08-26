@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Half the bugs in the first release were Windows-only: localized cmd.exe
+    # and taskkill output that English-only matching never caught. Both
+    # platforms run on every change.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ["20", "22"]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # The Copilot SDK is an optional dependency and needs credentials to do
+      # anything, so the suite runs against the fake fixture without it.
+      - run: npm install --no-optional
+
+      - run: npm test

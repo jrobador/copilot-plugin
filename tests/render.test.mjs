@@ -25,6 +25,23 @@ describe("renderSetupReport", () => {
     });
     assert.match(output, /Copilot Setup/);
     assert.match(output, /ready/);
+    assert.match(output, /allowed programs \(--write jobs\): defaults only/);
+  });
+
+  it("lists extra programs allowed for run_command", () => {
+    const output = renderSetupReport({
+      ready: true,
+      node: { detail: "v22.0.0" },
+      npm: { detail: "10.0.0" },
+      copilot: { detail: "1.0.0" },
+      auth: { detail: "authenticated" },
+      sessionRuntime: { label: "direct startup" },
+      reviewGateEnabled: false,
+      extraPrograms: ["bun", "pytest"],
+      actionsTaken: [],
+      nextSteps: []
+    });
+    assert.match(output, /allowed programs \(--write jobs\): bun, pytest/);
   });
 });
 
@@ -87,6 +104,18 @@ describe("renderTaskResult", () => {
     assert.equal(renderTaskResult({ rawOutput: "Done." }, { touchedFiles: [], denials: [] }), "Done.\n");
   });
 
+  it("flags an unfenced shell before the rest of the footer", () => {
+    assert.equal(renderTaskResult({ rawOutput: "Done." }, { unsafeShell: true }), "Done.\n\nShell: unfenced (--unsafe-shell)\n");
+    const output = renderTaskResult(
+      { rawOutput: "Done." },
+      { unsafeShell: true, touchedFiles: ["src/a.js"], denials: [{ request: "command: node -e 1", reason: "no" }] }
+    );
+    assert.equal(
+      output,
+      "Done.\n\nShell: unfenced (--unsafe-shell)\n\nFiles changed:\n- src/a.js\n\nDenied:\n- command: node -e 1 — no\n"
+    );
+  });
+
   it("shows denials even when Copilot returned no output", () => {
     const output = renderTaskResult({ rawOutput: "" }, { denials: [{ request: "read: ~/.ssh/id_rsa" }] });
     assert.match(output, /did not return a final message/);
@@ -132,6 +161,14 @@ describe("renderStoredJobResult", () => {
     );
     assert.match(output, /Done\.\n\nFiles changed:\n- src\/a\.js\n\nDenied:\n- write: \/etc\/x — outside\n/);
     assert.match(output, /Copilot session ID: sess-1/);
+  });
+
+  it("shows an unfenced shell from the stored payload", () => {
+    const output = renderStoredJobResult(
+      { id: "job-1", status: "completed", title: "Task" },
+      { result: { rawOutput: "Done.", unsafeShell: true }, threadId: null }
+    );
+    assert.equal(output, "Done.\n\nShell: unfenced (--unsafe-shell)\n");
   });
 });
 

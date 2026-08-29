@@ -18,6 +18,8 @@
  * without a live Copilot runtime.
  */
 
+import fs from "node:fs";
+
 import { createWorkspacePolicy, isInsideWorkspace } from "./paths.mjs";
 
 /** Review and diagnosis: Copilot may look, never touch. */
@@ -26,6 +28,66 @@ export const READ_ONLY = "read-only";
 export const WORKSPACE_WRITE = "workspace-write";
 
 export const PERMISSION_MODES = new Set([READ_ONLY, WORKSPACE_WRITE]);
+
+/**
+ * The one custom tool this plugin registers (see run-command.mjs). Declared
+ * here so the policy can recognize it without importing the tool module.
+ */
+export const RUN_COMMAND_TOOL_NAME = "run_command";
+
+/**
+ * Paths inside the workspace that a delegated job must never write. Being
+ * inside the fence is not enough: these run code on the user's behalf later
+ * (hooks on the next commit, CI on the next push, tasks on the next editor
+ * launch) or are git's own bookkeeping. Posix-relative; `X/**` covers X and
+ * everything under it.
+ */
+export const PROTECTED_PATHS = Object.freeze([
+  ".git",
+  ".git/**",
+  ".github/workflows/**",
+  ".husky/**",
+  ".vscode/tasks.json"
+]);
+
+const IS_WINDOWS = process.platform === "win32";
+
+function protectedKey(text) {
+  return IS_WINDOWS ? text.toLowerCase() : text;
+}
+
+/**
+ * @param {string} relativePosix  Workspace-relative posix path ("" is the root).
+ * @returns {{protected: boolean, pattern: string|null}}
+ */
+export function isProtectedPath(relativePosix) {
+  if (typeof relativePosix !== "string" || relativePosix === "") {
+    return { protected: false, pattern: null };
+  }
+  const rel = protectedKey(relativePosix);
+  for (const pattern of PROTECTED_PATHS) {
+    const key = protectedKey(pattern);
+    if (key.endsWith("/**")) {
+      const base = key.slice(0, -3);
+      if (rel === base || rel.startsWith(`${base}/`)) {
+        return { protected: true, pattern };
+      }
+    } else if (rel === key) {
+      return { protected: true, pattern };
+    }
+  }
+  return { protected: false, pattern: null };
+}
+
+/** Number of directory entries pointing at this file, or 0 when it is not a file. */
+function hardlinkCount(resolvedPath) {
+  try {
+    const stat = fs.statSync(resolvedPath);
+    return stat.isFile() ? stat.nlink : 0;
+  } catch {
+    return 0;
+  }
+}
 
 const APPROVE = Object.freeze({ kind: "approve-once" });
 
@@ -149,6 +211,21 @@ export function decidePermission(request, mode = READ_ONLY, policy = {}) {
       if (!check.inside) {
         return deny(`Refused to write ${request.fileName ?? "a file"}: ${outsideReason(check, workspace)}.`);
       }
+      // Inside the fence is not the whole story. Some paths run code later on
+      // the user's behalf, and a hardlink lets a write land in a file that
+      // lives somewhere else entirely. Both are refused in both modes.
+      const protection = isProtectedPath(check.relative);
+      if (protection.protected) {
+        return deny(
+          `Refused to write ${request.fileName}: ${check.relative} is a protected path (${protection.pattern}); hooks, CI workflows and git metadata are off limits to delegated jobs.`
+        );
+      }
+      const links = hardlinkCount(check.resolved);
+      if (links > 1) {
+        return deny(
+          `Refused to write ${request.fileName}: it is hardlinked to another location (${links} links); editing it would change a file outside this path.`
+        );
+      }
       return effectiveMode === WORKSPACE_WRITE
         ? allow("Write mode is enabled for this job.", check.relative)
         : deny(
@@ -222,6 +299,14 @@ export function decidePermission(request, mode = READ_ONLY, policy = {}) {
               request.toolName ?? "?"
             }: it is not read-only and this job is read-only.`
           );
+
+    case "custom-tool":
+      // The CLI asks about custom tools that were registered without
+      // `skipPermission`. Ours sets it, because run_command decides inside its
+      // own handler; this branch is belt and braces for any other host tool.
+      return request.toolName === RUN_COMMAND_TOOL_NAME
+        ? allow(`${RUN_COMMAND_TOOL_NAME} enforces its own policy.`)
+        : deny(`Refused custom tool ${request.toolName ?? "?"}: not registered by this plugin.`);
 
     case "memory":
       // Persisted across sessions and invisible in the job output. A delegated

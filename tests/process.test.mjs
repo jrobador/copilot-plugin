@@ -10,6 +10,21 @@ import {
   formatCommandFailure
 } from "../plugins/copilot/scripts/lib/process.mjs";
 
+describe("resolveBinary", () => {
+  it("finds node on every platform", () => {
+    assert.ok(resolveBinary("node"));
+  });
+
+  it("prefers PATHEXT candidates over npm's extensionless POSIX shim", { skip: process.platform !== "win32" }, (t) => {
+    const resolved = resolveBinary("npm");
+    if (!resolved) {
+      t.skip("npm not on PATH");
+      return;
+    }
+    assert.match(resolved, /\.(cmd|exe)$/i);
+  });
+});
+
 describe("runCommand", () => {
   it("returns stdout for successful command", () => {
     const result = runCommand("echo", ["hello"]);

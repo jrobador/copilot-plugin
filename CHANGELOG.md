@@ -27,11 +27,34 @@ at `4837b0b`, itself a port of OpenAI's Codex plugin for Claude Code.
   refused when it lands outside the git root, in both modes. Reads outside the
   workspace are refused too, since a write-capable job has network access and a
   read-only one still leaks the contents into the transcript. Touched files and
-  denials are recorded on the job and shown under the task output. Known gap:
-  the shell check depends on the runtime naming the paths a command touches,
-  and on Windows it names none for PowerShell, so a `--write` job can still
-  write outside the workspace through the shell there.
+  denials are recorded on the job and shown under the task output.
+- **The runtime's shell tools are replaced by `run_command`.** `bash`,
+  `powershell` and their helpers hand the model an interpreter, and the
+  runtime's own path extraction returns nothing for PowerShell, so a `--write`
+  job could still write anywhere through the shell. Every session now excludes
+  those tools and registers `run_command` (`lib/run-command.mjs`): one program
+  from a per-mode allowlist, an argument list, no shell, cwd pinned to the job
+  directory, environment scrubbed of `GIT_*` relocation variables,
+  `NODE_OPTIONS` and `npm_config_*`, every path-looking argument resolved and
+  confined to the workspace, options that relocate a program or evaluate inline
+  code refused, output capped and the process tree killed on timeout. The same
+  rules hold on Linux, macOS and Windows. Read-only jobs get `rg` and git's
+  read subcommands, which also gives reviews on Windows a working shell for
+  the first time. `--unsafe-shell` restores the runtime's tools and is
+  recorded on the job.
+- **Protected paths.** Writes to `.git/`, `.github/workflows/`, `.husky/` and
+  `.vscode/tasks.json` are refused in both modes: inside the fence, but they run
+  code on the user's behalf later.
+- **Hardlinks.** A write to a file with more than one link is refused; the
+  bytes would land in a file that lives somewhere else.
+- **Wide roots.** A `--write` task whose workspace root is the home directory,
+  an ancestor of it, or a drive root is refused unless `--allow-wide-root` is
+  passed.
 - Denied requests are reported in the job output instead of failing silently.
+- Remaining limit, stated in the README: `run_command` fences what Copilot
+  invokes, not what the invoked program does. Repository scripts and git hooks
+  run with the user's privileges; only an OS sandbox closes that, and this
+  plugin does not provide one.
 
 ### Fixed
 
@@ -69,6 +92,9 @@ at `4837b0b`, itself a port of OpenAI's Codex plugin for Claude Code.
   model. Aliases: `opus`, `sonnet`, `codex`, `gemini`.
 - An unavailable model id fails before the session starts, listing valid ids.
 - `/copilot:setup` lists the models the account can use.
+- `--unsafe-shell` and `--allow-wide-root` on `/copilot:rescue`.
+- `/copilot:setup --allow-programs a,b,c` and `--clear-allowed-programs` to
+  extend the `--write` allowlist of `run_command` per workspace.
 - The plain review is structured like the adversarial one, against
   `schemas/review-output.schema.json`. It was previously a one-line prompt with
   no schema, so its output could not be rendered or ordered by severity.

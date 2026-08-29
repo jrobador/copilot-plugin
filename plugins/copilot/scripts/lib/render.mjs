@@ -187,6 +187,11 @@ export function renderSetupReport(report) {
     `- auth: ${report.auth.detail}`,
     `- session runtime: ${report.sessionRuntime.label}`,
     `- review gate: ${report.reviewGateEnabled ? "enabled" : "disabled"}`,
+    `- allowed programs (--write jobs): ${
+      Array.isArray(report.extraPrograms) && report.extraPrograms.length > 0
+        ? report.extraPrograms.join(", ")
+        : "defaults only"
+    }`,
     ""
   ];
 
@@ -317,14 +322,18 @@ export function renderNativeReviewResult(result, meta) {
  * and requests it refused. Empty string when there is nothing to say, so
  * output that had no permission traffic renders exactly as before.
  */
-export function renderPermissionFooter({ touchedFiles = [], denials = [] } = {}) {
+export function renderPermissionFooter({ touchedFiles = [], denials = [], unsafeShell = false } = {}) {
   const files = Array.isArray(touchedFiles) ? touchedFiles.filter(Boolean) : [];
   const refused = Array.isArray(denials) ? denials.filter(Boolean) : [];
-  if (files.length === 0 && refused.length === 0) {
+  const unfenced = unsafeShell === true;
+  if (files.length === 0 && refused.length === 0 && !unfenced) {
     return "";
   }
 
   const lines = [];
+  if (unfenced) {
+    lines.push("", "Shell: unfenced (--unsafe-shell)");
+  }
   if (files.length > 0) {
     lines.push("", "Files changed:", ...files.map((file) => `- ${file}`));
   }

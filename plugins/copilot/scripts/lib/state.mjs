@@ -20,7 +20,9 @@ function defaultState() {
   return {
     version: STATE_VERSION,
     config: {
-      stopReviewGate: false
+      stopReviewGate: false,
+      // Extra programs run_command may spawn in --write jobs; see `setup --allow-programs`.
+      extraPrograms: []
     },
     jobs: []
   };

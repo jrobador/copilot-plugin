@@ -8,7 +8,8 @@ import path from "node:path";
 import {
   canonicalizePath,
   createWorkspacePolicy,
-  isInsideWorkspace
+  isInsideWorkspace,
+  isWideRoot
 } from "../plugins/copilot/scripts/lib/paths.mjs";
 import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
 
@@ -227,5 +228,31 @@ describe("canonicalizePath", () => {
     const root = path.parse(process.cwd()).root;
     const ghost = path.join(root, "definitely-missing-copilot-plugin-cc", "a", "b.txt");
     assert.equal(canonicalizePath(ghost), ghost);
+  });
+});
+
+describe("isWideRoot", () => {
+  it("flags the home directory, its ancestors and filesystem roots", () => {
+    const home = os.homedir();
+    assert.equal(isWideRoot(home), true);
+    assert.equal(isWideRoot(path.dirname(home)), true);
+    assert.equal(isWideRoot(path.parse(home).root), true);
+    assert.equal(isWideRoot(path.parse(process.cwd()).root), true);
+  });
+
+  it("accepts project directories", () => {
+    const ws = createTempWorkspace();
+    try {
+      assert.equal(isWideRoot(ws), false);
+    } finally {
+      cleanupDir(ws);
+    }
+    assert.equal(isWideRoot(process.cwd()), false);
+  });
+
+  it("fails closed on malformed input", () => {
+    assert.equal(isWideRoot(""), true);
+    assert.equal(isWideRoot(undefined), true);
+    assert.equal(isWideRoot(null), true);
   });
 });

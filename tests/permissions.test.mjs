@@ -7,8 +7,11 @@ import {
   createPermissionHandler,
   decidePermission,
   describeRequest,
+  isProtectedPath,
   normalizeMode,
+  PROTECTED_PATHS,
   READ_ONLY,
+  RUN_COMMAND_TOOL_NAME,
   WORKSPACE_WRITE
 } from "../plugins/copilot/scripts/lib/permissions.mjs";
 import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
@@ -301,6 +304,82 @@ describe("describeRequest", () => {
     assert.equal(describeRequest({ kind: "write", fileName: "a.js" }), "write: a.js");
     assert.equal(describeRequest({ kind: "read", path: "a.js" }), "read: a.js");
     assert.equal(describeRequest({ kind: "url", url: "https://x.dev" }), "url: https://x.dev");
+    assert.equal(describeRequest({ kind: "custom-tool", toolName: "run_command" }), "custom-tool: run_command");
     assert.equal(describeRequest(undefined), "unknown");
+  });
+});
+
+describe("isProtectedPath", () => {
+  it("matches git metadata, hooks, workflows and editor tasks", () => {
+    for (const rel of [".git", ".git/config", ".git/hooks/pre-commit", ".github/workflows/ci.yml", ".husky/pre-commit", ".vscode/tasks.json"]) {
+      assert.equal(isProtectedPath(rel).protected, true, rel);
+      assert.ok(PROTECTED_PATHS.includes(isProtectedPath(rel).pattern));
+    }
+  });
+
+  it("leaves ordinary dotfiles alone", () => {
+    for (const rel of ["", ".gitignore", ".gitattributes", ".github/CODEOWNERS", ".vscode/settings.json", "src/.git-keep", ".husky-notes"]) {
+      assert.equal(isProtectedPath(rel).protected, false, rel);
+    }
+    assert.equal(isProtectedPath(undefined).protected, false);
+  });
+
+  it("ignores case on Windows", { skip: process.platform !== "win32" }, () => {
+    assert.equal(isProtectedPath(".GIT/config").protected, true);
+    assert.equal(isProtectedPath(".Github/Workflows/ci.yml").protected, true);
+  });
+});
+
+describe("decidePermission: protected paths", () => {
+  for (const mode of [READ_ONLY, WORKSPACE_WRITE]) {
+    it(`refuses writes to protected paths (${mode})`, () => {
+      for (const fileName of [".git/config", ".github/workflows/ci.yml", ".husky/pre-commit", ".vscode/tasks.json", path.join(ws, ".git", "hooks", "pre-commit")]) {
+        const result = decidePermission({ kind: "write", fileName }, mode, policy);
+        assert.equal(result.allowed, false, fileName);
+        assert.match(result.reason, /protected path/);
+      }
+    });
+  }
+
+  it("still allows ordinary dotfiles in write mode and reads of git metadata", () => {
+    for (const fileName of [".gitignore", ".github/CODEOWNERS", ".vscode/settings.json"]) {
+      assert.equal(decidePermission({ kind: "write", fileName }, WORKSPACE_WRITE, policy).allowed, true, fileName);
+    }
+    assert.equal(decidePermission({ kind: "read", path: ".git/HEAD" }, READ_ONLY, policy).allowed, true);
+  });
+});
+
+describe("decidePermission: hardlinks", () => {
+  it("refuses writing a file that is hardlinked elsewhere", (t) => {
+    const original = path.join(ws, "linked.txt");
+    const alias = path.join(ws, "alias.txt");
+    fs.writeFileSync(original, "x");
+    try {
+      fs.linkSync(original, alias);
+    } catch (error) {
+      t.skip(`hardlinks not supported here (${error.code})`);
+      return;
+    }
+    const result = decidePermission({ kind: "write", fileName: "linked.txt" }, WORKSPACE_WRITE, policy);
+    assert.equal(result.allowed, false);
+    assert.match(result.reason, /hardlinked/);
+    assert.equal(decidePermission({ kind: "write", fileName: "alias.txt" }, WORKSPACE_WRITE, policy).allowed, false);
+  });
+
+  it("allows files with a single link and files that do not exist yet", () => {
+    fs.writeFileSync(path.join(ws, "single.txt"), "x");
+    assert.equal(decidePermission({ kind: "write", fileName: "single.txt" }, WORKSPACE_WRITE, policy).allowed, true);
+    assert.equal(decidePermission({ kind: "write", fileName: "brand-new.txt" }, WORKSPACE_WRITE, policy).allowed, true);
+  });
+});
+
+describe("decidePermission: custom tools", () => {
+  it("allows only run_command", () => {
+    for (const mode of [READ_ONLY, WORKSPACE_WRITE]) {
+      assert.equal(decidePermission({ kind: "custom-tool", toolName: RUN_COMMAND_TOOL_NAME }, mode, policy).allowed, true);
+      const other = decidePermission({ kind: "custom-tool", toolName: "other" }, mode, policy);
+      assert.equal(other.allowed, false);
+      assert.match(other.reason, /not registered/);
+    }
   });
 });

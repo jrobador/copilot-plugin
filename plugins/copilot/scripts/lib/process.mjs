@@ -45,8 +45,18 @@ export function resolveBinary(command, env = process.env) {
     ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
     : [""];
 
+  // On Windows the bare name often exists too: npm ships `npm` (a POSIX sh
+  // shim for Git Bash) next to `npm.cmd`. cmd.exe would never pick the shim,
+  // and spawning it directly fails with ENOENT, so try PATHEXT first and only
+  // accept the bare name when it already carries an executable extension.
+  const lower = (text) => text.toLowerCase();
   const candidates = (base) =>
-    [base, ...extensions.map((extension) => `${base}${extension}`)].filter(Boolean);
+    isWindows
+      ? [
+          ...extensions.map((extension) => `${base}${extension}`),
+          ...(extensions.some((extension) => lower(base).endsWith(lower(extension))) ? [base] : [])
+        ]
+      : [base];
 
   const isExecutableFile = (candidate) => {
     try {

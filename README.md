@@ -171,27 +171,62 @@ prompt.
 | Request | Decision |
 |---|---|
 | Read a file inside the workspace | allowed |
-| Shell command the runtime classified as read-only | allowed |
+| `run_command` with `git` (read subcommands) or `rg` | allowed |
 | Write a file | refused |
-| Shell command that can mutate state, or redirects to a file | refused |
+| `run_command` with any other program, or a git subcommand that mutates | refused |
 | Network access | refused |
 | MCP tool not declared read-only | refused |
 | Read or write a path outside the workspace (after resolving `..`, symlinks and Windows short names) | refused |
 
-**Write-capable rescues** additionally allow writes, mutating commands and
-network access. Writes are confined to the workspace root: the git top level,
-or the `-C` directory when there is no repository. Shell commands are not
-sandboxed — a command is refused when the runtime reports that it references a
-path outside the workspace, and otherwise runs as-is — so treat `--write` as
-trusting Copilot with the shell. On Windows in particular, the runtime's path
-extractor does not understand PowerShell, so it reports no paths at all and
-the shell check never fires; Copilot also tends to write files through
-`Set-Content` there rather than its file tool, so "Files changed" can
-under-report on Windows.
+**Write-capable rescues** additionally allow writes, network access, and
+`run_command` with the common toolchains. Writes are confined to the workspace
+root: the git top level, or the `-C` directory when there is no repository.
 
-**Refused in both modes**: reads and writes outside the workspace, shell
-commands that name paths outside it, and writes to Copilot's persistent memory
-— a delegated job should not quietly change what Copilot remembers about you.
+**Refused in both modes**: reads and writes outside the workspace, command
+arguments that name paths outside it, writes to `.git/`, `.github/workflows/`,
+`.husky/` and `.vscode/tasks.json` (they run code on your behalf later), writes
+to files hardlinked elsewhere, and writes to Copilot's persistent memory — a
+delegated job should not quietly change what Copilot remembers about you.
+
+A `--write` job is also refused when its workspace root is your home directory,
+an ancestor of it, or a drive root, because "inside the workspace" would then
+mean everything you own. Pass `--allow-wide-root` if you really mean it.
+
+### Shell
+
+Copilot's runtime ships shell tools (`bash` on Unix, `powershell` on Windows,
+plus their read/write/stop/list helpers). They hand the model an interpreter,
+and an interpreter cannot be fenced by reading its input: bash and PowerShell
+are different languages, and on Windows the runtime does not even try to
+extract paths from PowerShell. So every session removes those tools and
+registers `run_command` instead.
+
+`run_command` takes a program name and an argument list and spawns exactly
+that — no shell, so no pipes, redirection, `&&`, `cd`, globbing or variable
+expansion, on any OS. It runs in the job directory with an environment
+scrubbed of `GIT_DIR`-style relocation variables, `NODE_OPTIONS`, and
+`npm_config_*`, and it kills the process tree after ten minutes.
+
+| Mode | Programs |
+|---|---|
+| read-only | `git` (`log diff show status blame grep ls-files rev-parse branch describe shortlog cat-file remote`; `branch`/`remote` in listing form only), `rg` |
+| `--write` | `git npm pnpm yarn npx node python python3 pytest dotnet cargo go make rg ls`, plus anything added with `/copilot:setup --allow-programs a,b,c` |
+
+Every argument that looks like a path is resolved and must land inside the
+workspace. Options that relocate a program or make it evaluate inline code are
+refused in both modes: `git -C`/`--git-dir`/`-c` before the subcommand,
+`node -e`/`-r`/`--import`, `python -c`, `npm --prefix`/`-g`, `make -C`/`-f`,
+`cargo --manifest-path`, `go -C`, `rg --pre`, and the like.
+
+`--unsafe-shell` on a rescue restores the runtime's own shell tools. The job
+record and the output say so (`Shell: unfenced`). Claude never adds this flag
+on its own.
+
+**What this does not do.** `run_command` fences what Copilot can invoke, not
+what the invoked program does. `npm test`, `node script.js`, `make` and git
+hooks in the repository run with your full user privileges and network access;
+nothing short of an OS sandbox closes that, and this plugin does not provide
+one. Windows has no built-in equivalent.
 
 Denials are reported in the job output, so a review that could not run something
 tells you so instead of silently working around it.
@@ -203,7 +238,8 @@ Claude Code
   └─ slash command (.md, mostly prompt)
        └─ scripts/copilot-companion.mjs        one CLI: setup|review|task|status|result|cancel
             ├─ lib/copilot-client.mjs          @github/copilot-sdk over JSON-RPC
-            │    └─ lib/permissions.mjs        decides every permission request
+            │    ├─ lib/permissions.mjs        decides every permission request
+            │    └─ lib/run-command.mjs        the argv-only shell replacement
             ├─ lib/git.mjs                     review targeting and diff collection
             └─ lib/state.mjs                   per-workspace job records
 ```

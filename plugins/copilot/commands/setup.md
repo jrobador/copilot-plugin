@@ -1,6 +1,6 @@
 ---
 description: Check whether the local Copilot CLI is ready and optionally toggle the stop-time review gate
-argument-hint: '[--enable-review-gate|--disable-review-gate]'
+argument-hint: '[--enable-review-gate|--disable-review-gate] [--allow-programs a,b,c|--clear-allowed-programs]'
 allowed-tools: Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
 

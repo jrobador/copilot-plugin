@@ -9,7 +9,9 @@
 import { createRequire } from "node:module";
 
 import { binaryAvailable } from "./process.mjs";
+import { createWorkspacePolicy } from "./paths.mjs";
 import { createPermissionHandler, normalizeMode, READ_ONLY, WORKSPACE_WRITE } from "./permissions.mjs";
+import { createRunCommandTool, SHELL_TOOL_NAMES } from "./run-command.mjs";
 
 const SESSION_ID_ENV = "COPILOT_COMPANION_SESSION_ID";
 const DEFAULT_CONTINUE_PROMPT =
@@ -79,31 +81,47 @@ export async function shutdownClient(cwd) {
 
 export function buildSessionConfig(options, permissionMode, sink) {
   const cwd = options.cwd ?? process.cwd();
+  // Every read, write and command argument is judged against this root. The
+  // git top level when there is one, so a job started in a sub-package can
+  // still reach its siblings; the cwd itself otherwise.
+  const workspaceRoot = options.workspaceRoot ?? cwd;
+  const policy = createWorkspacePolicy(workspaceRoot, cwd);
+  // The handler is bound once, at session creation, but each turn needs its
+  // own record of what was denied. `sink.current` is swapped per turn by
+  // runPrompt, so the long-lived handler always reaches the running turn.
+  const observe = (entry) => {
+    options.onPermissionDecision?.(entry);
+    sink.current?.(entry);
+  };
+
   const config = {
     clientName: CLIENT_NAME,
-    // The handler is bound once, at session creation, but each turn needs its
-    // own record of what was denied. `sink.current` is swapped per turn by
-    // runPrompt, so the long-lived handler always reaches the running turn.
-    onPermissionRequest: createPermissionHandler(
-      permissionMode,
-      (entry) => {
-        options.onPermissionDecision?.(entry);
-        sink.current?.(entry);
-      },
-      // Every read, write and shell path is judged against this root. The
-      // git top level when there is one, so a job started in a sub-package
-      // can still reach its siblings; the cwd itself otherwise.
-      { workspaceRoot: options.workspaceRoot ?? cwd, cwd }
-    ),
+    onPermissionRequest: createPermissionHandler(permissionMode, observe, { workspaceRoot, cwd }),
     // Touched files are reported back to the user, so track them.
-    enableFileChangeTracking: permissionMode === WORKSPACE_WRITE
+    enableFileChangeTracking: permissionMode === WORKSPACE_WRITE,
+    // The runtime's shell tools hand the model an interpreter we cannot
+    // fence. run_command spawns one program with an argument list instead,
+    // and reports through the same observer as the permission handler.
+    tools: [
+      createRunCommandTool({
+        mode: permissionMode,
+        policy,
+        config: { extraPrograms: options.extraPrograms ?? [] },
+        onDecision: observe
+      })
+    ]
   };
+
+  const excluded = new Set(Array.isArray(options.excludedTools) ? options.excludedTools : []);
+  if (options.unsafeShell !== true) {
+    for (const name of SHELL_TOOL_NAMES) excluded.add(name);
+  }
+  if (excluded.size > 0) config.excludedTools = [...excluded];
 
   if (options.model) config.model = options.model;
   if (options.reasoningEffort) config.reasoningEffort = options.reasoningEffort;
   if (options.systemMessage) config.systemMessage = options.systemMessage;
   if (options.availableTools) config.availableTools = options.availableTools;
-  if (options.excludedTools) config.excludedTools = options.excludedTools;
 
   return config;
 }
@@ -113,6 +131,10 @@ export function buildSessionConfig(options, permissionMode, sink) {
  * @param {string} [options.cwd]              Directory the session runs in.
  * @param {string} [options.workspaceRoot]    Containment root for the permission
  *                                            policy (the git top level); defaults to cwd.
+ * @param {boolean} [options.unsafeShell]     Keep the runtime's own shell tools. Off by
+ *                                            default: run_command replaces them.
+ * @param {string[]} [options.extraPrograms]  Extra programs run_command may spawn in
+ *                                            write mode (from `setup --allow-programs`).
  * @param {string} [options.model]            Model id; see listModels().
  * @param {string} [options.reasoningEffort]  Only for models that support it.
  * @param {string} [options.sessionId]        Set to make the session resumable.
@@ -242,6 +264,16 @@ export async function runPrompt(session, prompt, options = {}) {
     if (entry.allowed) {
       if (entry.kind === "write" && entry.file) {
         touchedFiles.add(entry.file);
+      }
+      if (entry.kind === "command") {
+        const exit = entry.detail?.timedOut ? "timeout" : (entry.detail?.exitCode ?? "?");
+        onProgress?.({
+          message: `Ran ${entry.request}.`,
+          phase: "running",
+          stderrMessage: `Ran ${entry.request} (exit ${exit})`,
+          logTitle: `Command (exit ${exit})`,
+          logBody: entry.detail?.preview || null
+        });
       }
       return;
     }
@@ -441,7 +473,7 @@ export { DEFAULT_CONTINUE_PROMPT, TASK_SESSION_PREFIX, SESSION_ID_ENV, READ_ONLY
  * during the turn, so the report can say which files changed and what was
  * refused instead of pretending nothing was.
  */
-export function buildTaskPayload(result, { sessionId, rawOutput } = {}) {
+export function buildTaskPayload(result, { sessionId, rawOutput, unsafeShell } = {}) {
   const output = rawOutput ?? result?.content ?? "";
   return {
     status: output ? 0 : 1,
@@ -449,6 +481,7 @@ export function buildTaskPayload(result, { sessionId, rawOutput } = {}) {
     rawOutput: output,
     touchedFiles: Array.isArray(result?.touchedFiles) ? result.touchedFiles : [],
     denials: Array.isArray(result?.denials) ? result.denials : [],
+    unsafeShell: Boolean(unsafeShell),
     reasoningSummary: result?.reasoning ? [result.reasoning] : []
   };
 }

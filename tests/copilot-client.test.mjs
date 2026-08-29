@@ -10,6 +10,7 @@ import {
   buildTaskPayload,
   DECISION_SINK,
   getCopilotAvailability,
+  READ_ONLY,
   runPrompt,
   WORKSPACE_WRITE
 } from "../plugins/copilot/scripts/lib/copilot-client.mjs";
@@ -264,6 +265,90 @@ describe("buildSessionConfig", () => {
   });
 });
 
+describe("buildSessionConfig: run_command", () => {
+  let parent;
+  let ws;
+  before(() => {
+    parent = createTempWorkspace();
+    ws = path.join(parent, "ws");
+    fs.mkdirSync(path.join(ws, "src"), { recursive: true });
+  });
+  after(() => cleanupDir(parent));
+
+  const shellTools = [
+    "bash",
+    "read_bash",
+    "write_bash",
+    "stop_bash",
+    "list_bash",
+    "powershell",
+    "read_powershell",
+    "write_powershell",
+    "stop_powershell",
+    "list_powershell"
+  ];
+
+  it("registers run_command and excludes the runtime's shell tools", () => {
+    const config = buildSessionConfig({ cwd: ws, workspaceRoot: ws }, WORKSPACE_WRITE, { current: null });
+    assert.equal(config.tools.length, 1);
+    const tool = config.tools[0];
+    assert.equal(tool.name, "run_command");
+    assert.equal(tool.skipPermission, true);
+    assert.equal(tool.defer, "never");
+    assert.equal(tool.parameters.type, "object");
+    assert.equal(typeof tool.handler, "function");
+    assert.deepEqual([...config.excludedTools].sort(), [...shellTools].sort());
+  });
+
+  it("keeps the caller's exclusions alongside the shell tools", () => {
+    const config = buildSessionConfig({ cwd: ws, excludedTools: ["fetch"] }, READ_ONLY, { current: null });
+    assert.equal(config.excludedTools.length, 11);
+    assert.ok(config.excludedTools.includes("fetch"));
+    assert.ok(config.excludedTools.includes("bash"));
+  });
+
+  it("leaves the shell tools in place only with unsafeShell", () => {
+    const config = buildSessionConfig({ cwd: ws, unsafeShell: true }, WORKSPACE_WRITE, { current: null });
+    assert.equal(config.excludedTools, undefined);
+    assert.equal(config.tools[0].name, "run_command");
+  });
+
+  it("threads extraPrograms into the tool", () => {
+    const config = buildSessionConfig({ cwd: ws, extraPrograms: ["bun"] }, WORKSPACE_WRITE, { current: null });
+    assert.match(config.tools[0].description, /Allowed programs: .*bun/);
+  });
+
+  it("routes command denials and successes into the running turn", async () => {
+    // The fake turn must stay open while the (async) tool handler runs, or the
+    // sink is restored before the command reports. sendAndWait awaits whatever
+    // _cannedResponse is, so gate it on a promise we release afterwards.
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const target = new FakeCopilotSession({ _cannedEvents: [], _cannedResponse: gate });
+    const sink = { current: null };
+    const progress = [];
+    const config = buildSessionConfig({ cwd: ws, workspaceRoot: ws }, WORKSPACE_WRITE, sink);
+    target[DECISION_SINK] = sink;
+
+    const promise = runPrompt(target, "go", { onProgress: (p) => progress.push(p) });
+    const denied = await config.tools[0].handler({ program: "node", args: ["-e", "1"] });
+    const ran = await config.tools[0].handler({ program: "node", args: ["--version"] });
+    release({ data: { content: "ok" } });
+    const result = await promise;
+
+    assert.equal(denied.resultType, "denied");
+    assert.equal(ran.resultType, "success");
+    assert.equal(result.denials.length, 1);
+    assert.equal(result.denials[0].kind, "command");
+    assert.deepEqual(result.touchedFiles, []);
+    const line = progress.find((p) => p.message.startsWith("Ran command: node --version"));
+    assert.ok(line, "expected a progress line for the allowed command");
+    assert.equal(line.logTitle, "Command (exit 0)");
+  });
+});
+
 describe("buildTaskPayload", () => {
   it("carries touched files and denials from the turn", () => {
     const payload = buildTaskPayload(
@@ -282,8 +367,14 @@ describe("buildTaskPayload", () => {
       rawOutput: "Done.",
       touchedFiles: ["src/a.js"],
       denials: [{ kind: "write", reason: "outside" }],
+      unsafeShell: false,
       reasoningSummary: ["thought"]
     });
+  });
+
+  it("records an unfenced shell on the payload", () => {
+    const payload = buildTaskPayload({ content: "x" }, { sessionId: "s", rawOutput: "x", unsafeShell: true });
+    assert.equal(payload.unsafeShell, true);
   });
 
   it("falls back to empty lists and the caller's session id", () => {

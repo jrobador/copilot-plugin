@@ -22,6 +22,7 @@ Execution rules:
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
 - Pass aliases (`opus`, `sonnet`, `codex`, `gemini`) through unchanged; the companion resolves them.
 - Default to a write-capable Copilot run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- Never add `--unsafe-shell` or `--allow-wide-root` on your own; forward them only when the user typed them. The first hands Copilot an unfenced shell, the second lets a `--write` job treat your home directory or a drive root as its workspace.
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.

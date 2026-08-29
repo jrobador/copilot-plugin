@@ -54,6 +54,7 @@ import {
   SESSION_ID_ENV
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
+import { isWideRoot } from "./lib/paths.mjs";
 import {
   renderReviewResult,
   renderStoredJobResult,
@@ -87,10 +88,10 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/copilot-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
+      "  node scripts/copilot-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--allow-programs a,b,c|--clear-allowed-programs] [--json]",
       "  node scripts/copilot-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>]",
       "  node scripts/copilot-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>] [focus text]",
-      "  node scripts/copilot-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <low|medium|high|xhigh|max>] [prompt]",
+      "  node scripts/copilot-companion.mjs task [--background] [--write] [--unsafe-shell] [--allow-wide-root] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <low|medium|high|xhigh|max>] [prompt]",
       "  node scripts/copilot-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/copilot-companion.mjs result [job-id] [--json]",
       "  node scripts/copilot-companion.mjs cancel [job-id] [--json]"
@@ -221,19 +222,37 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     sessionRuntime: getSessionRuntimeStatus(),
     models: models.map((model) => model.id ?? model.name).filter(Boolean),
     reviewGateEnabled: Boolean(config.stopReviewGate),
+    extraPrograms: Array.isArray(config.extraPrograms) ? config.extraPrograms : [],
     actionsTaken,
     nextSteps
   };
 }
 
+/** `--allow-programs a,b,c` → validated, lowercase, deduped program names. */
+function parseAllowedPrograms(raw) {
+  const names = String(raw ?? "")
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  for (const name of names) {
+    if (!/^[a-z0-9._+-]+$/.test(name)) {
+      throw new Error(`Invalid program name "${name}": use bare names like bun or pytest, not paths.`);
+    }
+  }
+  return [...new Set(names)];
+}
+
 async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
-    valueOptions: ["cwd"],
-    booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
+    valueOptions: ["cwd", "allow-programs"],
+    booleanOptions: ["json", "enable-review-gate", "disable-review-gate", "clear-allowed-programs"]
   });
 
   if (options["enable-review-gate"] && options["disable-review-gate"]) {
     throw new Error("Choose either --enable-review-gate or --disable-review-gate.");
+  }
+  if (options["allow-programs"] !== undefined && options["clear-allowed-programs"]) {
+    throw new Error("Choose either --allow-programs or --clear-allowed-programs.");
   }
 
   const cwd = resolveCommandCwd(options);
@@ -246,6 +265,19 @@ async function handleSetup(argv) {
   } else if (options["disable-review-gate"]) {
     setConfig(workspaceRoot, "stopReviewGate", false);
     actionsTaken.push(`Disabled the stop-time review gate for ${workspaceRoot}.`);
+  }
+
+  if (options["allow-programs"] !== undefined) {
+    const programs = parseAllowedPrograms(options["allow-programs"]);
+    setConfig(workspaceRoot, "extraPrograms", programs);
+    actionsTaken.push(
+      programs.length > 0
+        ? `Allowed run_command to spawn ${programs.join(", ")} in --write jobs for ${workspaceRoot}.`
+        : `Cleared the extra run_command programs for ${workspaceRoot}.`
+    );
+  } else if (options["clear-allowed-programs"]) {
+    setConfig(workspaceRoot, "extraPrograms", []);
+    actionsTaken.push(`Cleared the extra run_command programs for ${workspaceRoot}.`);
   }
 
   const finalReport = await buildSetupReport(cwd, actionsTaken);
@@ -495,26 +527,37 @@ async function executeTaskRun(request) {
   // flag, stored it on the job record, printed it in the report, and never
   // passed it to the session, so every task ran with blanket approval.
   const permissionMode = request.write ? WORKSPACE_WRITE : READ_ONLY;
+  // The background worker re-reads the stored request, so the wide-root
+  // refusal has to hold here too, not only where the flags were parsed.
+  assertWriteRootAcceptable(request, workspaceRoot);
+  const unsafeShell = request.unsafeShell === true;
+  const extraPrograms = getConfig(workspaceRoot).extraPrograms ?? [];
+  const sessionOptions = {
+    cwd: request.cwd,
+    workspaceRoot,
+    model: request.model,
+    reasoningEffort: request.effort,
+    permissionMode,
+    unsafeShell,
+    extraPrograms
+  };
 
   const { session, resumed } = request.resumeLast
-    ? await resumeSession(sessionId, {
-        cwd: request.cwd,
-        workspaceRoot,
-        model: request.model,
-        reasoningEffort: request.effort,
-        permissionMode
-      })
+    ? await resumeSession(sessionId, sessionOptions)
     : {
-        session: await createSession({
-          cwd: request.cwd,
-          workspaceRoot,
-          model: request.model,
-          reasoningEffort: request.effort,
-          permissionMode,
-          sessionId
-        }),
+        session: await createSession({ ...sessionOptions, sessionId }),
         resumed: false
       };
+
+  if (unsafeShell) {
+    request.onProgress?.({
+      message: "Shell tools are unfenced (--unsafe-shell).",
+      phase: "starting",
+      stderrMessage: "Shell: unfenced (--unsafe-shell)",
+      logTitle: null,
+      logBody: null
+    });
+  }
 
   if (request.resumeLast && !resumed) {
     request.onProgress?.({
@@ -531,7 +574,7 @@ async function executeTaskRun(request) {
   const rawOutput = result.content ?? "";
   const failureMessage = "";
 
-  const payload = buildTaskPayload(result, { sessionId, rawOutput });
+  const payload = buildTaskPayload(result, { sessionId, rawOutput, unsafeShell });
   const rendered = renderTaskResult(
     {
       rawOutput,
@@ -543,7 +586,8 @@ async function executeTaskRun(request) {
       jobId: request.jobId ?? null,
       write: Boolean(request.write),
       touchedFiles: payload.touchedFiles,
-      denials: payload.denials
+      denials: payload.denials,
+      unsafeShell
     }
   );
 
@@ -555,7 +599,8 @@ async function executeTaskRun(request) {
     summary: firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
     jobTitle: taskMetadata.title,
     jobClass: "task",
-    write: Boolean(request.write)
+    write: Boolean(request.write),
+    unsafeShell
   };
 }
 
@@ -594,7 +639,17 @@ function getJobKindLabel(kind, jobClass) {
   return jobClass === "review" ? "review" : "rescue";
 }
 
-function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }) {
+function createCompanionJob({
+  prefix,
+  kind,
+  title,
+  workspaceRoot,
+  jobClass,
+  summary,
+  write = false,
+  unsafeShell = false,
+  allowWideRoot = false
+}) {
   return createJobRecord({
     id: generateJobId(prefix),
     kind,
@@ -603,7 +658,9 @@ function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summ
     workspaceRoot,
     jobClass,
     summary,
-    write
+    write,
+    unsafeShell,
+    allowWideRoot
   });
 }
 
@@ -619,7 +676,7 @@ function createTrackedProgress(job, options = {}) {
   };
 }
 
-function buildTaskJob(workspaceRoot, taskMetadata, write) {
+function buildTaskJob(workspaceRoot, taskMetadata, write, flags = {}) {
   return createCompanionJob({
     prefix: "task",
     kind: "task",
@@ -627,20 +684,35 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
     workspaceRoot,
     jobClass: "task",
     summary: taskMetadata.summary,
-    write
+    write,
+    unsafeShell: Boolean(flags.unsafeShell),
+    allowWideRoot: Boolean(flags.allowWideRoot)
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, unsafeShell, allowWideRoot, resumeLast, jobId }) {
   return {
     cwd,
     model,
     effort,
     prompt,
     write,
+    unsafeShell: Boolean(unsafeShell),
+    allowWideRoot: Boolean(allowWideRoot),
     resumeLast,
     jobId
   };
+}
+
+/**
+ * A --write job whose root is the home directory or a drive root would be
+ * allowed to edit everything the user owns. Refuse unless explicitly asked.
+ */
+function assertWriteRootAcceptable({ write, allowWideRoot }, workspaceRoot) {
+  if (!write || allowWideRoot || !isWideRoot(workspaceRoot)) return;
+  throw new Error(
+    `Refused to run a --write task with workspace root ${workspaceRoot}: it is your home directory, an ancestor of it, or a filesystem root, so "inside the workspace" would mean everything. Run from a project directory, or pass --allow-wide-root if you really mean it.`
+  );
 }
 
 function readTaskPrompt(cwd, options, positionals) {
@@ -766,7 +838,7 @@ async function handleReview(argv) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    booleanOptions: ["json", "write", "unsafe-shell", "allow-wide-root", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
     }
@@ -784,6 +856,11 @@ async function handleTask(argv) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
   const write = Boolean(options.write);
+  const flags = {
+    unsafeShell: Boolean(options["unsafe-shell"]),
+    allowWideRoot: Boolean(options["allow-wide-root"])
+  };
+  assertWriteRootAcceptable({ write, allowWideRoot: flags.allowWideRoot }, workspaceRoot);
   const taskMetadata = buildTaskRunMetadata({
     prompt,
     resumeLast
@@ -793,13 +870,14 @@ async function handleTask(argv) {
     await ensureCopilotReady(cwd);
     requireTaskRequest(prompt, resumeLast);
 
-    const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+    const job = buildTaskJob(workspaceRoot, taskMetadata, write, flags);
     const request = buildTaskRequest({
       cwd,
       model,
       effort,
       prompt,
       write,
+      ...flags,
       resumeLast,
       jobId: job.id
     });
@@ -808,7 +886,7 @@ async function handleTask(argv) {
     return;
   }
 
-  const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+  const job = buildTaskJob(workspaceRoot, taskMetadata, write, flags);
   await runForegroundCommand(
     job,
     (progress) =>
@@ -818,6 +896,7 @@ async function handleTask(argv) {
         effort,
         prompt,
         write,
+        ...flags,
         resumeLast,
         jobId: job.id,
         onProgress: progress

@@ -32,6 +32,7 @@ Forwarding rules:
 - Do not guess a model id. An id the account cannot use is rejected up front with the list of valid ones.
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
 - Default to a write-capable Copilot run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- Never add `--unsafe-shell` or `--allow-wide-root` on your own; forward them only when the user typed them. The first hands Copilot an unfenced shell, the second lets a `--write` job treat your home directory or a drive root as its workspace.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.
 - `--fresh` means do not add `--resume-last`.

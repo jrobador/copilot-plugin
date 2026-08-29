@@ -188,3 +188,28 @@ export function isInsideWorkspace(root, candidate, opts = {}) {
     error: null
   };
 }
+
+/**
+ * A workspace root so wide that "inside the workspace" stops meaning anything:
+ * the home directory, an ancestor of it, or a filesystem/drive root. A job
+ * launched from one of these with --write would be allowed to edit
+ * everything the user owns. Malformed input counts as wide (fail closed).
+ */
+export function isWideRoot(root) {
+  if (typeof root !== "string" || root.trim() === "") {
+    return true;
+  }
+  let canonical;
+  let home;
+  try {
+    canonical = canonicalizePath(path.resolve(root));
+    home = canonicalizePath(path.resolve(os.homedir()));
+  } catch {
+    return true;
+  }
+  const rootKey = compareKey(canonical);
+  const homeKey = compareKey(home);
+  if (rootKey === homeKey) return true;
+  if (homeKey.startsWith(rootKey.endsWith(path.sep) ? rootKey : `${rootKey}${path.sep}`)) return true;
+  return rootKey === compareKey(path.parse(canonical).root);
+}

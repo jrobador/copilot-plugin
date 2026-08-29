@@ -77,16 +77,24 @@ export async function shutdownClient(cwd) {
   }
 }
 
-function buildSessionConfig(options, permissionMode, sink) {
+export function buildSessionConfig(options, permissionMode, sink) {
+  const cwd = options.cwd ?? process.cwd();
   const config = {
     clientName: CLIENT_NAME,
     // The handler is bound once, at session creation, but each turn needs its
     // own record of what was denied. `sink.current` is swapped per turn by
     // runPrompt, so the long-lived handler always reaches the running turn.
-    onPermissionRequest: createPermissionHandler(permissionMode, (entry) => {
-      options.onPermissionDecision?.(entry);
-      sink.current?.(entry);
-    }),
+    onPermissionRequest: createPermissionHandler(
+      permissionMode,
+      (entry) => {
+        options.onPermissionDecision?.(entry);
+        sink.current?.(entry);
+      },
+      // Every read, write and shell path is judged against this root. The
+      // git top level when there is one, so a job started in a sub-package
+      // can still reach its siblings; the cwd itself otherwise.
+      { workspaceRoot: options.workspaceRoot ?? cwd, cwd }
+    ),
     // Touched files are reported back to the user, so track them.
     enableFileChangeTracking: permissionMode === WORKSPACE_WRITE
   };
@@ -102,7 +110,9 @@ function buildSessionConfig(options, permissionMode, sink) {
 
 /**
  * @param {object} options
- * @param {string} [options.cwd]              Workspace root the job is scoped to.
+ * @param {string} [options.cwd]              Directory the session runs in.
+ * @param {string} [options.workspaceRoot]    Containment root for the permission
+ *                                            policy (the git top level); defaults to cwd.
  * @param {string} [options.model]            Model id; see listModels().
  * @param {string} [options.reasoningEffort]  Only for models that support it.
  * @param {string} [options.sessionId]        Set to make the session resumable.
@@ -425,3 +435,20 @@ export function buildPersistentTaskSessionId(prompt) {
 }
 
 export { DEFAULT_CONTINUE_PROMPT, TASK_SESSION_PREFIX, SESSION_ID_ENV, READ_ONLY, WORKSPACE_WRITE };
+
+/**
+ * The stored result of a task job. Carries what the permission handler saw
+ * during the turn, so the report can say which files changed and what was
+ * refused instead of pretending nothing was.
+ */
+export function buildTaskPayload(result, { sessionId, rawOutput } = {}) {
+  const output = rawOutput ?? result?.content ?? "";
+  return {
+    status: output ? 0 : 1,
+    sessionId: result?.sessionId ?? sessionId ?? null,
+    rawOutput: output,
+    touchedFiles: Array.isArray(result?.touchedFiles) ? result.touchedFiles : [],
+    denials: Array.isArray(result?.denials) ? result.denials : [],
+    reasoningSummary: result?.reasoning ? [result.reasoning] : []
+  };
+}

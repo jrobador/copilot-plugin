@@ -170,19 +170,28 @@ prompt.
 
 | Request | Decision |
 |---|---|
-| Read a file | allowed |
+| Read a file inside the workspace | allowed |
 | Shell command the runtime classified as read-only | allowed |
 | Write a file | refused |
 | Shell command that can mutate state, or redirects to a file | refused |
 | Network access | refused |
 | MCP tool not declared read-only | refused |
+| Read or write a path outside the workspace (after resolving `..`, symlinks and Windows short names) | refused |
 
 **Write-capable rescues** additionally allow writes, mutating commands and
-network access, scoped to the workspace.
+network access. Writes are confined to the workspace root: the git top level,
+or the `-C` directory when there is no repository. Shell commands are not
+sandboxed — a command is refused when the runtime reports that it references a
+path outside the workspace, and otherwise runs as-is — so treat `--write` as
+trusting Copilot with the shell. On Windows in particular, the runtime's path
+extractor does not understand PowerShell, so it reports no paths at all and
+the shell check never fires; Copilot also tends to write files through
+`Set-Content` there rather than its file tool, so "Files changed" can
+under-report on Windows.
 
-**Refused in both modes**: sandbox escapes, and writes to Copilot's persistent
-memory — a delegated job should not quietly change what Copilot remembers about
-you.
+**Refused in both modes**: reads and writes outside the workspace, shell
+commands that name paths outside it, and writes to Copilot's persistent memory
+— a delegated job should not quietly change what Copilot remembers about you.
 
 Denials are reported in the job output, so a review that could not run something
 tells you so instead of silently working around it.

@@ -17,6 +17,20 @@ at `4837b0b`, itself a port of OpenAI's Codex plugin for Claude Code.
   non-read-only MCP tools are refused. Sandbox escapes and writes to Copilot's
   persistent memory are refused in both modes, and unknown request kinds fail
   closed.
+- **`--write` is confined to the workspace.** The write policy only checked the
+  mode, and its "outside the workspace" guard relied on the SDK's
+  `requestSandboxBypass` flag, which the runtime only sets when a host
+  configures a sandbox — this plugin never did, so `--write` could edit any
+  path on the machine. Every `read`, `write` and shell `possiblePaths` entry is
+  now resolved (`lib/paths.mjs`: relative to the workspace, through `..`,
+  symlinks, junctions and Windows 8.3 names, case-insensitively on Windows) and
+  refused when it lands outside the git root, in both modes. Reads outside the
+  workspace are refused too, since a write-capable job has network access and a
+  read-only one still leaks the contents into the transcript. Touched files and
+  denials are recorded on the job and shown under the task output. Known gap:
+  the shell check depends on the runtime naming the paths a command touches,
+  and on Windows it names none for PowerShell, so a `--write` job can still
+  write outside the workspace through the shell there.
 - Denied requests are reported in the job output instead of failing silently.
 
 ### Fixed

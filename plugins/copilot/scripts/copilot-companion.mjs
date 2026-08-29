@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
     buildPersistentTaskSessionId,
+    buildTaskPayload,
     DEFAULT_CONTINUE_PROMPT,
     createSession,
     runPrompt,
@@ -374,6 +375,7 @@ async function executeReviewRun(request) {
 
   const session = await createSession({
     cwd: context.repoRoot,
+    workspaceRoot: context.repoRoot,
     model: request.model,
     reasoningEffort: request.effort,
     // A review never edits. This is enforced by the permission handler, not by
@@ -414,7 +416,11 @@ async function executeReviewRun(request) {
       result: parsed.parsed,
       rawOutput: parsed.rawOutput,
       parseError: parsed.parseError,
-      reasoningSummary: result.reasoning ? [result.reasoning] : []
+      reasoningSummary: result.reasoning ? [result.reasoning] : [],
+      // A review is read-only, so touchedFiles should stay empty; recording
+      // both makes a violation visible instead of silently absorbed.
+      touchedFiles: result.touchedFiles ?? [],
+      denials: result.denials ?? []
     };
     return {
       exitStatus: rawOutput ? 0 : 1,
@@ -493,6 +499,7 @@ async function executeTaskRun(request) {
   const { session, resumed } = request.resumeLast
     ? await resumeSession(sessionId, {
         cwd: request.cwd,
+        workspaceRoot,
         model: request.model,
         reasoningEffort: request.effort,
         permissionMode
@@ -500,6 +507,7 @@ async function executeTaskRun(request) {
     : {
         session: await createSession({
           cwd: request.cwd,
+          workspaceRoot,
           model: request.model,
           reasoningEffort: request.effort,
           permissionMode,
@@ -523,25 +531,21 @@ async function executeTaskRun(request) {
   const rawOutput = result.content ?? "";
   const failureMessage = "";
 
+  const payload = buildTaskPayload(result, { sessionId, rawOutput });
   const rendered = renderTaskResult(
     {
       rawOutput,
       failureMessage,
-      reasoningSummary: result.reasoning ? [result.reasoning] : []
+      reasoningSummary: payload.reasoningSummary
     },
     {
       title: taskMetadata.title,
       jobId: request.jobId ?? null,
-      write: Boolean(request.write)
+      write: Boolean(request.write),
+      touchedFiles: payload.touchedFiles,
+      denials: payload.denials
     }
   );
-  const payload = {
-    status: rawOutput ? 0 : 1,
-    sessionId: result.sessionId ?? sessionId,
-    rawOutput,
-    touchedFiles: [],
-    reasoningSummary: result.reasoning ? [result.reasoning] : []
-  };
 
   return {
     exitStatus: rawOutput ? 0 : 1,

@@ -312,14 +312,45 @@ export function renderNativeReviewResult(result, meta) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
+/**
+ * What the permission handler saw during a task: files it let Copilot write,
+ * and requests it refused. Empty string when there is nothing to say, so
+ * output that had no permission traffic renders exactly as before.
+ */
+export function renderPermissionFooter({ touchedFiles = [], denials = [] } = {}) {
+  const files = Array.isArray(touchedFiles) ? touchedFiles.filter(Boolean) : [];
+  const refused = Array.isArray(denials) ? denials.filter(Boolean) : [];
+  if (files.length === 0 && refused.length === 0) {
+    return "";
+  }
+
+  const lines = [];
+  if (files.length > 0) {
+    lines.push("", "Files changed:", ...files.map((file) => `- ${file}`));
+  }
+  if (refused.length > 0) {
+    lines.push(
+      "",
+      "Denied:",
+      ...refused.map((entry) => {
+        const label = entry.request ?? entry.kind ?? "request";
+        return entry.reason ? `- ${label} — ${entry.reason}` : `- ${label}`;
+      })
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 export function renderTaskResult(parsedResult, meta) {
   const rawOutput = typeof parsedResult?.rawOutput === "string" ? parsedResult.rawOutput : "";
+  const footer = renderPermissionFooter(meta);
   if (rawOutput) {
-    return rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
+    const body = rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
+    return `${body}${footer}`;
   }
 
   const message = String(parsedResult?.failureMessage ?? "").trim() || "Copilot did not return a final message.";
-  return `${message}\n`;
+  return `${message}\n${footer}`;
 }
 
 export function renderStatusReport(report) {
@@ -403,7 +434,10 @@ export function renderStoredJobResult(job, storedJob) {
     (typeof storedJob?.result?.copilot?.stdout === "string" && storedJob.result.copilot.stdout) ||
     "";
   if (rawOutput) {
-    const output = rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
+    // `/copilot:result` re-renders from the stored payload, not from the text
+    // the job printed at the time, so the footer has to be rebuilt here too.
+    const body = rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
+    const output = `${body}${renderPermissionFooter(storedJob?.result)}`;
     if (!threadId) {
       return output;
     }

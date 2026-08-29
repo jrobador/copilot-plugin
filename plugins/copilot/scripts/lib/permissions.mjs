@@ -5,9 +5,20 @@
  * `onPermissionRequest`. Upstream answered `approve-once` to everything, which
  * made `--write` decorative: a "read-only" review could still edit the tree.
  *
+ * Two questions are asked of every request, in order:
+ *
+ *   1. Is the path inside the workspace? Decided here, by resolving it the way
+ *      the filesystem would (see paths.mjs). The SDK's own "outside the
+ *      sandbox" signal, `requestSandboxBypass`, is only ever set when a host
+ *      configures a sandbox, which this plugin does not, so it cannot be the
+ *      mechanism.
+ *   2. Does the job's mode permit this kind of action?
+ *
  * These are pure functions with no SDK import, so the policy is unit-testable
  * without a live Copilot runtime.
  */
+
+import { createWorkspacePolicy, isInsideWorkspace } from "./paths.mjs";
 
 /** Review and diagnosis: Copilot may look, never touch. */
 export const READ_ONLY = "read-only";
@@ -22,12 +33,12 @@ function reject(reason) {
   return { kind: "reject", feedback: reason };
 }
 
-function allow(reason) {
-  return { decision: APPROVE, allowed: true, reason };
+function allow(reason, file = null) {
+  return { decision: APPROVE, allowed: true, reason, file };
 }
 
 function deny(reason) {
-  return { decision: reject(reason), allowed: false, reason };
+  return { decision: reject(reason), allowed: false, reason, file: null };
 }
 
 export function normalizeMode(mode) {
@@ -35,6 +46,31 @@ export function normalizeMode(mode) {
   if (mode === false || mode == null) return READ_ONLY;
   const normalized = String(mode).trim().toLowerCase();
   return PERMISSION_MODES.has(normalized) ? normalized : READ_ONLY;
+}
+
+/**
+ * Accept either a ready-made policy from createWorkspacePolicy or the loose
+ * `{ workspaceRoot, cwd }` shape, defaulting to the process cwd.
+ */
+function resolvePolicy(policy) {
+  if (policy && typeof policy === "object" && policy.rootCanonical) {
+    return policy;
+  }
+  const root = policy?.workspaceRoot ?? policy?.cwd ?? process.cwd();
+  return createWorkspacePolicy(root, policy?.cwd ?? root);
+}
+
+/** Why a path was judged outside, in words the model can act on. */
+function outsideReason(check, policy) {
+  if (check.error) {
+    return `the path is invalid (${check.error})`;
+  }
+  return `it resolves to ${check.resolved}, outside the workspace ${policy.root}`;
+}
+
+/** Pseudo-devices a shell touches without touching the filesystem. */
+function isDevicePath(candidate) {
+  return typeof candidate === "string" && /^\/dev\//.test(candidate);
 }
 
 /**
@@ -68,14 +104,19 @@ export function describeRequest(request) {
  *
  * @param {object} request  SDK PermissionRequest (discriminated on `kind`).
  * @param {string} mode     READ_ONLY or WORKSPACE_WRITE.
- * @returns {{decision: object, allowed: boolean, reason: string}}
+ * @param {object} [policy] `{ workspaceRoot, cwd }` or a createWorkspacePolicy
+ *                          result. Defaults to the process cwd.
+ * @returns {{decision: object, allowed: boolean, reason: string, file: string|null}}
+ *   `file` is the workspace-relative posix path of an allowed read or write.
  */
-export function decidePermission(request, mode = READ_ONLY) {
+export function decidePermission(request, mode = READ_ONLY, policy = {}) {
   const effectiveMode = normalizeMode(mode);
   const kind = request?.kind;
+  const workspace = resolvePolicy(policy);
 
-  // A sandbox bypass is a request to act outside the workspace the job was
-  // scoped to. Never granted automatically, in either mode.
+  // The SDK sets this only when a host configures `sandbox.allowBypass`, which
+  // we never do, so in practice it never arrives. Kept as defense in depth:
+  // if a runtime ever does ask, the answer is still no, in either mode.
   if (request?.requestSandboxBypass) {
     return deny(
       `Sandbox bypass denied. This job is scoped to its workspace. Reason given: ${
@@ -85,19 +126,57 @@ export function decidePermission(request, mode = READ_ONLY) {
   }
 
   switch (kind) {
-    case "read":
-      return allow("Reads are always permitted.");
+    case "read": {
+      // Denied in both modes. A read-only job would leak the contents into the
+      // transcript; a write job, with network access open, can send them
+      // anywhere. Neither is what "review this repo" means.
+      const check = isInsideWorkspace(workspace, request.path, { cwd: workspace.cwd });
+      if (!check.inside) {
+        return deny(
+          `Refused to read ${request.path ?? "a file"}: ${outsideReason(
+            check,
+            workspace
+          )}. Include the file in the prompt or run the job from a directory that contains it.`
+        );
+      }
+      return allow("Read inside the workspace.", check.relative);
+    }
 
-    case "write":
+    case "write": {
+      // Containment first, in both modes, so the denial names the real
+      // problem instead of hiding it behind "read-only".
+      const check = isInsideWorkspace(workspace, request.fileName, { cwd: workspace.cwd });
+      if (!check.inside) {
+        return deny(`Refused to write ${request.fileName ?? "a file"}: ${outsideReason(check, workspace)}.`);
+      }
       return effectiveMode === WORKSPACE_WRITE
-        ? allow("Write mode is enabled for this job.")
+        ? allow("Write mode is enabled for this job.", check.relative)
         : deny(
             `Refused to write ${
               request.fileName ?? "a file"
             }: this job is read-only. Report the change as a suggested diff instead of applying it.`
           );
+    }
 
     case "shell": {
+      // The runtime extracts the paths a command may touch. This is not a
+      // sandbox: a command that hides its target from the extractor still
+      // runs. But when the runtime does name a path outside the workspace,
+      // refuse it, in both modes.
+      const possiblePaths = Array.isArray(request.possiblePaths) ? request.possiblePaths : [];
+      for (const candidate of possiblePaths) {
+        if (isDevicePath(candidate)) continue;
+        const check = isInsideWorkspace(workspace, candidate, { cwd: workspace.cwd });
+        if (!check.inside) {
+          return deny(
+            `Refused \`${request.fullCommandText}\`: it references ${candidate}, ${outsideReason(
+              check,
+              workspace
+            )}.`
+          );
+        }
+      }
+
       // The runtime classifies each parsed command; trust that over any
       // allowlist we could write ourselves, since it understands chaining.
       const commands = Array.isArray(request.commands) ? request.commands : [];
@@ -161,20 +240,27 @@ export function decidePermission(request, mode = READ_ONLY) {
  *
  * @param {string} mode          READ_ONLY or WORKSPACE_WRITE.
  * @param {(entry: object) => void} [onDecision]  Observer for logging.
+ * @param {{workspaceRoot?: string, cwd?: string}} [scope]
+ *   Containment root (the git top level) and the directory relative paths
+ *   resolve against. Both default to the process cwd.
  */
-export function createPermissionHandler(mode, onDecision) {
+export function createPermissionHandler(mode, onDecision, scope = {}) {
   const effectiveMode = normalizeMode(mode);
+  const root = scope.workspaceRoot ?? scope.cwd ?? process.cwd();
+  const workspace = createWorkspacePolicy(root, scope.cwd ?? root);
+
   return (request) => {
-    const { decision, allowed, reason } = decidePermission(request, effectiveMode);
+    const { decision, allowed, reason, file } = decidePermission(request, effectiveMode, workspace);
     onDecision?.({
       allowed,
       reason,
       mode: effectiveMode,
       request: describeRequest(request),
       kind: request?.kind ?? "unknown",
-      // Structured field for consumers; the `request` string above is display
-      // text, not something to parse back.
-      file: request?.fileName ?? request?.path ?? null
+      // Workspace-relative posix path of an allowed read or write, null
+      // otherwise. The `request` string above is display text, not something
+      // to parse back.
+      file
     });
     return decision;
   };

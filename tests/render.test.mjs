@@ -68,6 +68,30 @@ describe("renderTaskResult", () => {
     const output = renderTaskResult({ rawOutput: "", failureMessage: "Failed" }, {});
     assert.equal(output, "Failed\n");
   });
+
+  it("lists files changed and denied requests under the output", () => {
+    const output = renderTaskResult(
+      { rawOutput: "Done." },
+      {
+        touchedFiles: ["src/a.js"],
+        denials: [{ request: "write: /etc/x", reason: "Refused to write /etc/x: outside the workspace." }]
+      }
+    );
+    assert.equal(
+      output,
+      "Done.\n\nFiles changed:\n- src/a.js\n\nDenied:\n- write: /etc/x — Refused to write /etc/x: outside the workspace.\n"
+    );
+  });
+
+  it("omits the footer when nothing was touched or denied", () => {
+    assert.equal(renderTaskResult({ rawOutput: "Done." }, { touchedFiles: [], denials: [] }), "Done.\n");
+  });
+
+  it("shows denials even when Copilot returned no output", () => {
+    const output = renderTaskResult({ rawOutput: "" }, { denials: [{ request: "read: ~/.ssh/id_rsa" }] });
+    assert.match(output, /did not return a final message/);
+    assert.match(output, /Denied:\n- read: ~\/\.ssh\/id_rsa/);
+  });
 });
 
 describe("renderStatusReport", () => {
@@ -92,6 +116,22 @@ describe("renderStoredJobResult", () => {
       { result: { rawOutput: "Done." }, sessionId: "sess-1" }
     );
     assert.match(output, /Done/);
+  });
+
+  it("rebuilds the permission footer from the stored payload", () => {
+    const output = renderStoredJobResult(
+      { id: "job-1", status: "completed", title: "Task" },
+      {
+        result: {
+          rawOutput: "Done.",
+          touchedFiles: ["src/a.js"],
+          denials: [{ request: "write: /etc/x", reason: "outside" }]
+        },
+        threadId: "sess-1"
+      }
+    );
+    assert.match(output, /Done\.\n\nFiles changed:\n- src\/a\.js\n\nDenied:\n- write: \/etc\/x — outside\n/);
+    assert.match(output, /Copilot session ID: sess-1/);
   });
 });
 

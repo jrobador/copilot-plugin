@@ -1,12 +1,19 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+
+import fs from "node:fs";
+import path from "node:path";
 
 import { FakeCopilotClient, FakeCopilotSession } from "./fake-copilot-fixture.mjs";
 import {
+  buildSessionConfig,
+  buildTaskPayload,
   DECISION_SINK,
   getCopilotAvailability,
-  runPrompt
+  runPrompt,
+  WORKSPACE_WRITE
 } from "../plugins/copilot/scripts/lib/copilot-client.mjs";
+import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
 
 // We test the module's exported functions by mocking the SDK.
 // Since the module uses a real import, we test the logic patterns here.
@@ -193,5 +200,98 @@ describe("getCopilotAvailability", () => {
       assert.equal(result.source, null);
     }
     assert.ok(result.detail);
+  });
+});
+
+describe("buildSessionConfig", () => {
+  let parent;
+  let ws;
+  before(() => {
+    parent = createTempWorkspace();
+    ws = path.join(parent, "ws");
+    fs.mkdirSync(path.join(ws, "src"), { recursive: true });
+  });
+  after(() => cleanupDir(parent));
+
+  it("binds the permission handler to the workspace root", () => {
+    const seen = [];
+    const sink = { current: (entry) => seen.push(entry) };
+    const config = buildSessionConfig({ cwd: ws, workspaceRoot: ws }, WORKSPACE_WRITE, sink);
+
+    const outside = config.onPermissionRequest({ kind: "write", fileName: path.join(parent, "escape.txt") });
+    const inside = config.onPermissionRequest({ kind: "write", fileName: path.join(ws, "src", "b.js") });
+
+    assert.equal(outside.kind, "reject");
+    assert.match(outside.feedback, /outside the workspace/);
+    assert.equal(inside.kind, "approve-once");
+    assert.deepEqual(
+      seen.map((entry) => [entry.allowed, entry.file]),
+      [
+        [false, null],
+        [true, "src/b.js"]
+      ]
+    );
+  });
+
+  it("falls back to the cwd as the root when none is given", () => {
+    const sink = { current: null };
+    const config = buildSessionConfig({ cwd: ws }, WORKSPACE_WRITE, sink);
+    assert.equal(config.onPermissionRequest({ kind: "write", fileName: "src/c.js" }).kind, "approve-once");
+    assert.equal(config.onPermissionRequest({ kind: "write", fileName: "../escape.txt" }).kind, "reject");
+  });
+
+  it("judges relative paths from a sub-directory cwd against the git root", () => {
+    const sink = { current: null };
+    const config = buildSessionConfig({ cwd: path.join(ws, "src"), workspaceRoot: ws }, WORKSPACE_WRITE, sink);
+    assert.equal(config.onPermissionRequest({ kind: "write", fileName: "../README.md" }).kind, "approve-once");
+    assert.equal(config.onPermissionRequest({ kind: "write", fileName: "../../escape.txt" }).kind, "reject");
+  });
+
+  it("reports touched files through runPrompt end to end", async () => {
+    const target = new FakeCopilotSession({ _cannedEvents: [], _cannedResponse: { data: { content: "ok" } } });
+    const sink = { current: null };
+    const config = buildSessionConfig({ cwd: ws, workspaceRoot: ws }, WORKSPACE_WRITE, sink);
+    target[DECISION_SINK] = sink;
+
+    const promise = runPrompt(target, "go");
+    config.onPermissionRequest({ kind: "write", fileName: path.join(ws, "src", "b.js") });
+    config.onPermissionRequest({ kind: "write", fileName: path.join(parent, "escape.txt") });
+    const result = await promise;
+
+    assert.deepEqual(result.touchedFiles, ["src/b.js"]);
+    assert.equal(result.denials.length, 1);
+    assert.match(result.denials[0].reason, /outside the workspace/);
+  });
+});
+
+describe("buildTaskPayload", () => {
+  it("carries touched files and denials from the turn", () => {
+    const payload = buildTaskPayload(
+      {
+        content: "Done.",
+        sessionId: "sess-2",
+        reasoning: "thought",
+        touchedFiles: ["src/a.js"],
+        denials: [{ kind: "write", reason: "outside" }]
+      },
+      { sessionId: "sess-1", rawOutput: "Done." }
+    );
+    assert.deepEqual(payload, {
+      status: 0,
+      sessionId: "sess-2",
+      rawOutput: "Done.",
+      touchedFiles: ["src/a.js"],
+      denials: [{ kind: "write", reason: "outside" }],
+      reasoningSummary: ["thought"]
+    });
+  });
+
+  it("falls back to empty lists and the caller's session id", () => {
+    const payload = buildTaskPayload({ content: "" }, { sessionId: "sess-1", rawOutput: "" });
+    assert.equal(payload.status, 1);
+    assert.equal(payload.sessionId, "sess-1");
+    assert.deepEqual(payload.touchedFiles, []);
+    assert.deepEqual(payload.denials, []);
+    assert.deepEqual(payload.reasoningSummary, []);
   });
 });

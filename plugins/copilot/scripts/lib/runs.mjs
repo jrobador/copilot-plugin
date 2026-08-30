@@ -150,6 +150,19 @@ export async function ensureModelAvailable(cwd, model) {
   );
 }
 
+/**
+ * The Copilot session id of a job, whichever name it was stored under.
+ * `sessionId` is deliberately not consulted: that is the Claude Code session.
+ */
+export function copilotSessionIdOf(job) {
+  return job?.copilotSessionId ?? job?.threadId ?? null;
+}
+
+/** Is this a finished task whose Copilot session a follow-up can pick up? */
+export function isResumableTask(job) {
+  return job?.jobClass === "task" && job.status === "completed" && Boolean(copilotSessionIdOf(job));
+}
+
 export async function resolveLatestTrackedTaskSession(workspaceRoot, options = {}) {
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
   const activeTask = jobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
@@ -157,9 +170,9 @@ export async function resolveLatestTrackedTaskSession(workspaceRoot, options = {
     throw new Error(`Task ${activeTask.id} is still running. Use /copilot:status before continuing it.`);
   }
 
-  const trackedTask = jobs.find((job) => job.jobClass === "task" && job.status === "completed" && job.sessionId);
+  const trackedTask = jobs.find(isResumableTask);
   if (trackedTask) {
-    return { id: trackedTask.sessionId };
+    return { id: copilotSessionIdOf(trackedTask), jobId: trackedTask.id };
   }
 
   return null;
@@ -241,6 +254,8 @@ export async function executeReviewRun(request) {
     return {
       exitStatus: rawOutput ? 0 : 1,
       sessionId: result.sessionId,
+      copilotSessionId: result.sessionId ?? null,
+      threadId: result.sessionId ?? null,
       payload,
       rendered: renderReviewResult(parsed, {
         reviewLabel: reviewName,
@@ -268,6 +283,8 @@ export async function executeReviewRun(request) {
   return {
     exitStatus: rawOutput ? 0 : 1,
     sessionId: result.sessionId,
+    copilotSessionId: result.sessionId ?? null,
+    threadId: result.sessionId ?? null,
     payload,
     rendered: renderReviewResult(
       { parsed: null, parseError: null, rawOutput },
@@ -336,6 +353,9 @@ export async function executeTaskRun(request) {
         session: await createSession({ ...sessionOptions, sessionId }),
         resumed: false
       };
+  // Whatever session we actually ended up on: the requested one, or the fresh
+  // one resumeSession fell back to.
+  const activeSessionId = session?.sessionId ?? sessionId;
 
   if (unsafeShell) {
     request.onProgress?.({
@@ -347,11 +367,15 @@ export async function executeTaskRun(request) {
     });
   }
 
-  if (request.resumeLast && !resumed) {
+  if (request.resumeLast) {
     request.onProgress?.({
-      message: "Previous session could not be resumed; started a fresh one.",
+      message: resumed
+        ? `Resumed Copilot session ${activeSessionId}.`
+        : `Previous session ${sessionId} could not be resumed; started a fresh one (${activeSessionId}).`,
       phase: "starting",
-      stderrMessage: `Session ${sessionId} was not resumable; started fresh.`,
+      stderrMessage: resumed
+        ? `Resumed session ${activeSessionId}`
+        : `Session ${sessionId} was not resumable; started fresh as ${activeSessionId}.`,
       logTitle: null,
       logBody: null
     });
@@ -366,12 +390,13 @@ export async function executeTaskRun(request) {
   // the job is stored as awaiting-approval instead of completed, with enough to
   // revive it: the Copilot session id and the fields needed to resume.
   if (result.escalated) {
-    const copilotSessionId = result.sessionId ?? sessionId;
+    const copilotSessionId = result.sessionId ?? activeSessionId;
     return {
       escalated: true,
       exitStatus: 0,
       sessionId: copilotSessionId,
       copilotSessionId,
+      threadId: copilotSessionId,
       pendingApproval: result.pendingApproval,
       revive: {
         cwd: request.cwd,
@@ -379,7 +404,8 @@ export async function executeTaskRun(request) {
         model: request.model,
         effort: request.effort,
         write: Boolean(request.write),
-        unsafeShell
+        unsafeShell,
+        allowWideRoot: request.allowWideRoot === true
       },
       payload: buildTaskPayload(result, { sessionId, rawOutput, unsafeShell }),
       rendered: `${taskMetadata.title} is paused waiting for your approval to ${
@@ -393,7 +419,7 @@ export async function executeTaskRun(request) {
     };
   }
 
-  const payload = buildTaskPayload(result, { sessionId, rawOutput, unsafeShell });
+  const payload = buildTaskPayload(result, { sessionId: activeSessionId, rawOutput, unsafeShell });
   const rendered = renderTaskResult(
     {
       rawOutput,
@@ -410,9 +436,12 @@ export async function executeTaskRun(request) {
     }
   );
 
+  const copilotSessionId = result.sessionId ?? activeSessionId;
   return {
     exitStatus: rawOutput ? 0 : 1,
-    sessionId: result.sessionId ?? sessionId,
+    sessionId: copilotSessionId,
+    copilotSessionId,
+    threadId: copilotSessionId,
     payload,
     rendered,
     summary: firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
@@ -459,6 +488,9 @@ export function assertWriteRootAcceptable({ write, allowWideRoot }, workspaceRoo
 export async function executeApprovalResume(request) {
   const workspaceRoot = request.workspaceRoot ?? resolveWorkspaceRoot(request.cwd);
   await ensureCopilotReady(request.cwd);
+  // The revive context carries the original --write; the wide-root refusal
+  // holds on the way back in as well.
+  assertWriteRootAcceptable({ write: request.write, allowWideRoot: request.allowWideRoot }, workspaceRoot);
 
   const permissionMode = request.write ? WORKSPACE_WRITE : READ_ONLY;
   const approvedFile = request.pendingApproval?.file ?? null;
@@ -502,6 +534,7 @@ export async function executeApprovalResume(request) {
       exitStatus: 0,
       sessionId: copilotSessionId,
       copilotSessionId,
+      threadId: copilotSessionId,
       pendingApproval: result.pendingApproval,
       revive: {
         cwd: request.cwd,
@@ -509,7 +542,8 @@ export async function executeApprovalResume(request) {
         model: request.model,
         effort: request.effort,
         write: Boolean(request.write),
-        unsafeShell: request.unsafeShell === true
+        unsafeShell: request.unsafeShell === true,
+        allowWideRoot: request.allowWideRoot === true
       },
       payload: buildTaskPayload(result, { sessionId: copilotSessionId, rawOutput, unsafeShell: request.unsafeShell === true }),
       rendered: `Paused again waiting for your approval to ${result.pendingApproval?.request ?? "a request"}.\nApprove: /copilot:approve\nDeny: /copilot:deny\n`,
@@ -534,9 +568,12 @@ export async function executeApprovalResume(request) {
       unsafeShell: request.unsafeShell === true
     }
   );
+  const finalSessionId = result.sessionId ?? request.copilotSessionId;
   return {
     exitStatus: rawOutput ? 0 : 1,
-    sessionId: result.sessionId ?? request.copilotSessionId,
+    sessionId: finalSessionId,
+    copilotSessionId: finalSessionId,
+    threadId: finalSessionId,
     payload,
     rendered,
     summary: firstMeaningfulLine(rawOutput, "Resumed after approval."),

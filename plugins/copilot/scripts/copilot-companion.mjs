@@ -21,10 +21,12 @@ import { ROOT_DIR } from "./lib/plugin-root.mjs";
 import {
   assertWriteRootAcceptable,
   buildTaskRunMetadata,
+  copilotSessionIdOf,
   ensureCopilotReady,
   executeApprovalResume,
   executeReviewRun,
   executeTaskRun,
+  isResumableTask,
   normalizeReasoningEffort,
   normalizeRequestedModel
 } from "./lib/runs.mjs";
@@ -652,15 +654,9 @@ function handleTaskResumeCandidate(argv) {
   const workspaceRoot = resolveCommandWorkspace(options);
   const sessionId = process.env[SESSION_ID_ENV] ?? null;
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
-  const candidate =
-    jobs.find(
-      (job) =>
-        job.jobClass === "task" &&
-        job.sessionId &&
-        job.status !== "queued" &&
-        job.status !== "running" &&
-        (!sessionId || job.sessionId === sessionId)
-    ) ?? null;
+  // Only a finished task with a known Copilot session can be continued; a
+  // paused one is picked up with /copilot:approve, not --resume.
+  const candidate = jobs.find((job) => isResumableTask(job) && (!sessionId || job.sessionId === sessionId)) ?? null;
 
   const payload = {
     available: Boolean(candidate),
@@ -674,6 +670,7 @@ function handleTaskResumeCandidate(argv) {
             title: candidate.title ?? null,
             summary: candidate.summary ?? null,
             sessionId: candidate.sessionId,
+            copilotSessionId: copilotSessionIdOf(candidate),
             completedAt: candidate.completedAt ?? null,
             updatedAt: candidate.updatedAt ?? null
           }

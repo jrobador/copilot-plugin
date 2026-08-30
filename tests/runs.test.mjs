@@ -133,26 +133,54 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
     assert.equal(listJobs(tempDir).find((entry) => entry.id === job.id).status, "completed");
   });
 
-  // Audit H3 / task P0-3. The previous task's *Claude* session id is handed to
-  // resumeSession as if it were the Copilot session id, so the resume always
-  // fails and a fresh session is started under Claude's id.
-  it(
-    "--resume-last resumes the Copilot session of the previous task",
-    { todo: "P0-3: persist copilotSessionId on completed jobs and resume by it" },
-    async () => {
-      scriptFakeSessions({ _cannedResponse: { data: { content: "Continued." } } });
-      const client = await ensureClient(tempDir);
-      const before = client.calls.length;
+  // Audit H3 / task P0-3. The previous task's *Claude* session id used to be
+  // handed to resumeSession as if it were the Copilot session id, so the
+  // resume always failed and a fresh session started under Claude's id.
+  it("--resume-last resumes the Copilot session of the previous task", async () => {
+    scriptFakeSessions({ _cannedResponse: { data: { content: "Continued." } } });
+    const client = await ensureClient(tempDir);
+    const before = client.calls.length;
+    const progress = [];
 
-      const execution = await executeTaskRun({ cwd: tempDir, prompt: "continue", resumeLast: true, write: false, jobId: "task-flow-2" });
+    const execution = await executeTaskRun({
+      cwd: tempDir,
+      prompt: "continue",
+      resumeLast: true,
+      write: false,
+      jobId: "task-flow-2",
+      onProgress: (event) => progress.push(event.message)
+    });
 
-      const resumeCall = client.calls.slice(before).find((call) => call.call === "resumeSession");
-      assert.ok(resumeCall, "resumeSession was not called");
-      assert.equal(resumeCall.sessionId, firstTaskSessionId);
-      assert.equal(execution.sessionId, firstTaskSessionId);
-      assert.equal(readStoredJob(tempDir, "task-flow-1").copilotSessionId, firstTaskSessionId);
-    }
-  );
+    const resumeCall = client.calls.slice(before).find((call) => call.call === "resumeSession");
+    assert.ok(resumeCall, "resumeSession was not called");
+    assert.equal(resumeCall.sessionId, firstTaskSessionId);
+    assert.equal(execution.sessionId, firstTaskSessionId);
+    assert.equal(execution.copilotSessionId, firstTaskSessionId);
+    assert.ok(progress.some((message) => message.includes(`Resumed Copilot session ${firstTaskSessionId}`)), JSON.stringify(progress));
+    const stored = readStoredJob(tempDir, "task-flow-1");
+    assert.equal(stored.copilotSessionId, firstTaskSessionId);
+    assert.equal(stored.threadId, firstTaskSessionId, "the renderers read threadId");
+  });
+
+  it("--resume-last falls back to a fresh session with a new id when the old one is gone", async () => {
+    scriptFakeSessions({ _cannedResponse: { data: { content: "Started over." } } });
+    // Pretend the CLI pruned the session the last completed task points at.
+    const client = await ensureClient(tempDir);
+    client.knownSessions.clear();
+    const progress = [];
+
+    const execution = await executeTaskRun({
+      cwd: tempDir,
+      prompt: "continue",
+      resumeLast: true,
+      write: false,
+      jobId: "task-flow-3",
+      onProgress: (event) => progress.push(event.message)
+    });
+
+    assert.notEqual(execution.copilotSessionId, firstTaskSessionId, "the fresh session must not reuse the stale id");
+    assert.ok(progress.some((message) => /could not be resumed; started a fresh one/.test(message)), JSON.stringify(progress));
+  });
 
   let escalatedJobId;
 

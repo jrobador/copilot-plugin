@@ -57,6 +57,12 @@ export function createJobLogFile(workspaceRoot, jobId, title) {
   return logFile;
 }
 
+/**
+ * A new job record. `sessionId` is the **Claude Code** session the job was
+ * started from (COPILOT_COMPANION_SESSION_ID); it scopes /copilot:status and
+ * the SessionEnd cleanup. The Copilot session the job talks to is recorded
+ * separately, as `copilotSessionId`, once the run reports it.
+ */
 export function createJobRecord(base, options = {}) {
   const env = options.env ?? process.env;
   const sessionId = env[options.sessionIdEnv ?? SESSION_ID_ENV];
@@ -215,10 +221,14 @@ export async function runTrackedJob(job, runner, options = {}) {
 
     const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
     const completedAt = nowIso();
+    // The Copilot session behind this job. Kept under both names: threadId is
+    // what the renderers print, copilotSessionId is what a later resume reads.
+    const copilotSessionId = execution.copilotSessionId ?? execution.threadId ?? execution.sessionId ?? null;
     writeJobFile(job.workspaceRoot, job.id, {
       ...runningRecord,
       status: completionStatus,
-      threadId: execution.threadId ?? null,
+      threadId: copilotSessionId,
+      copilotSessionId,
       turnId: execution.turnId ?? null,
       pid: null,
       phase: completionStatus === "completed" ? "done" : "failed",
@@ -229,7 +239,8 @@ export async function runTrackedJob(job, runner, options = {}) {
     upsertJob(job.workspaceRoot, {
       id: job.id,
       status: completionStatus,
-      threadId: execution.threadId ?? null,
+      threadId: copilotSessionId,
+      copilotSessionId,
       turnId: execution.turnId ?? null,
       summary: execution.summary,
       phase: completionStatus === "completed" ? "done" : "failed",

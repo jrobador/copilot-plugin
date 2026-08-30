@@ -18,6 +18,19 @@ commands do; it changes what can go wrong while they do it.
 
 ### Fixed
 
+- `--resume` never resumed anything. The job recorded the **Claude Code**
+  session id under `sessionId`, and the resume path handed that to Copilot as
+  if it were the Copilot session id, so every continuation failed and started
+  a fresh conversation named after Claude's session. The Copilot session is
+  now stored on every finished job (`copilotSessionId`, also as `threadId`
+  for the renderers), `--resume` and the resume prompt in `/copilot:rescue`
+  look it up there, and a session the CLI has pruned falls back to a fresh one
+  with a fresh id, saying so in the progress log.
+- `/copilot:result` and `/copilot:status` printed no Copilot session id for
+  finished jobs, and the resume hint they print used a `copilot resume`
+  subcommand that does not exist; it is `copilot --resume <id>`.
+- Two runs of the same prompt asked the CLI to create a session with the same
+  id (every stop-gate review did). Session ids now carry a unique suffix.
 - Background jobs could stay `queued` forever. The detached worker was
   spawned before its job record was written, so a fast worker found nothing,
   died with its stderr discarded, and the job never moved. The record is

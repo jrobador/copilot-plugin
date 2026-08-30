@@ -223,10 +223,13 @@ export async function resumeSession(sessionId, options = {}) {
     // callers that require the original context pass allowFreshFallback:false
     // and treat resumed:false as "expired".
     if (options.allowFreshFallback === false) {
-      return { session: null, resumed: false };
+      return { session: null, resumed: false, previousId: sessionId };
     }
-    const session = await createSession({ ...options, cwd, sessionId, permissionMode });
-    return { session, resumed: false };
+    // A fresh session gets a fresh id. Reusing the one that failed to resume
+    // would name the new conversation after the old one and hide the fallback
+    // from every later lookup.
+    const session = await createSession({ ...options, cwd, permissionMode, sessionId: undefined });
+    return { session, resumed: false, previousId: sessionId };
   }
 }
 
@@ -545,7 +548,11 @@ export function buildPersistentTaskSessionId(prompt) {
     ? excerpt.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
     : "";
   const prefix = TASK_SESSION_PREFIX.toLowerCase().replace(/\s+/g, "-");
-  return slug ? `${prefix}-${slug}` : prefix;
+  // The slug is for humans reading ~/.copilot/session-state; the suffix keeps
+  // two runs of the same prompt (every stop-gate review, every "continue")
+  // from asking the CLI to create a session whose id already exists.
+  const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  return slug ? `${prefix}-${slug}-${suffix}` : `${prefix}-${suffix}`;
 }
 
 export { DEFAULT_CONTINUE_PROMPT, TASK_SESSION_PREFIX, SESSION_ID_ENV, READ_ONLY, WORKSPACE_WRITE };

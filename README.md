@@ -62,8 +62,6 @@ Being fixed in this release; until then:
   says the SDK is not installed, run `npm install @github/copilot-sdk` in the
   plugin directory (`~/.claude/plugins/cache/copilot-plugin-cc/copilot/<version>`)
   and retry.
-- **`--resume` starts a fresh Copilot thread** instead of continuing the
-  previous one. Ask for the same work again in prose if context matters.
 - **The review gate blocks the session end on any failure**, including a
   logged-out Copilot. If it loops, run `/copilot:setup --disable-review-gate`.
 - **Rescue asks Copilot to edit by default.** Say "read-only" in the request

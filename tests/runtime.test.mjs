@@ -22,7 +22,7 @@ describe("runtime: buildPersistentTaskSessionId", () => {
 
   it("handles empty prompt", () => {
     const id = buildPersistentTaskSessionId("");
-    assert.equal(id, "copilot-companion-task");
+    assert.match(id, /^copilot-companion-task-[a-z0-9]+$/);
   });
 
   it("shortens long prompts", () => {
@@ -31,20 +31,17 @@ describe("runtime: buildPersistentTaskSessionId", () => {
     assert.ok(id.length < 100);
   });
 
-  // Audit M6 / task P1-6. The id is a pure function of the first 56 characters
-  // of the prompt, so two runs of the same prompt (every stop-gate review, every
-  // "continue") ask the CLI to create a session with an id that already exists.
-  it(
-    "is unique across calls with the same prompt",
-    { todo: "P1-6: append a time/random suffix to the slug" },
-    () => {
+  // Audit M6 / task P1-6. The id used to be a pure function of the first 56
+  // characters of the prompt, so two runs of the same prompt (every stop-gate
+  // review, every "continue") asked the CLI to create a session with an id
+  // that already existed.
+  it("is unique across calls with the same prompt", () => {
       const first = buildPersistentTaskSessionId("Fix the authentication bug");
       const second = buildPersistentTaskSessionId("Fix the authentication bug");
       assert.notEqual(first, second);
       assert.match(second, /^[a-z0-9-]+$/);
-      assert.ok(second.startsWith("copilot-companion-task"));
-    }
-  );
+      assert.ok(second.startsWith("copilot-companion-task-fix-the-authentication-bug-"));
+  });
 });
 
 describe("runtime: parseStructuredOutput", () => {

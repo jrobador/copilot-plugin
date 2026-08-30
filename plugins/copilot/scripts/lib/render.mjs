@@ -103,7 +103,7 @@ function formatCopilotResumeCommand(job) {
   if (!job?.threadId) {
     return null;
   }
-  return `copilot resume ${job.threadId}`;
+  return `copilot --resume ${job.threadId}`;
 }
 
 function appendActiveJobsTable(lines, jobs) {
@@ -448,7 +448,7 @@ export function renderJobStatusReport(job) {
 
 export function renderStoredJobResult(job, storedJob) {
   const threadId = storedJob?.threadId ?? job.threadId ?? null;
-  const resumeCommand = threadId ? `copilot resume ${threadId}` : null;
+  const resumeCommand = threadId ? `copilot --resume ${threadId}` : null;
   if (isStructuredReviewStoredResult(storedJob) && storedJob?.rendered) {
     const output = storedJob.rendered.endsWith("\n") ? storedJob.rendered : `${storedJob.rendered}\n`;
     if (!threadId) {

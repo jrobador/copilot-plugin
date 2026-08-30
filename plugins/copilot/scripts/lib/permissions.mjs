@@ -200,9 +200,11 @@ export function describeRequest(request) {
  * @param {object} request  SDK PermissionRequest (discriminated on `kind`).
  * @param {string} mode     READ_ONLY or WORKSPACE_WRITE.
  * @param {object} [policy] `{ workspaceRoot, cwd }` or a createWorkspacePolicy
- *                          result. Defaults to the process cwd.
- * @returns {{decision: object, allowed: boolean, reason: string, file: string|null}}
+ *                          result. Defaults to the process cwd. May carry
+ *                          `escalateReads` / `approvedReads` (see escalate()).
+ * @returns {{decision: object, allowed: boolean, reason: string, file: string|null, escalate?: boolean}}
  *   `file` is the workspace-relative posix path of an allowed read or write.
+ *   `escalate` is true when the request was paused for the owner's decision.
  */
 export function decidePermission(request, mode = READ_ONLY, policy = {}) {
   const effectiveMode = normalizeMode(mode);
@@ -381,7 +383,12 @@ export function decidePermission(request, mode = READ_ONLY, policy = {}) {
  *
  * @param {string} mode          READ_ONLY or WORKSPACE_WRITE.
  * @param {(entry: object) => void} [onDecision]  Observer for logging.
- * @param {{workspaceRoot?: string, cwd?: string}} [scope]
+ * @param {{
+ *   workspaceRoot?: string,
+ *   cwd?: string,
+ *   escalateReads?: (relativePosix: string) => boolean,
+ *   approvedReads?: Set<string>|string[]
+ * }} [scope]
  *   Containment root (the git top level) and the directory relative paths
  *   resolve against. Both default to the process cwd.
  */
@@ -392,6 +399,7 @@ export function createPermissionHandler(mode, onDecision, scope = {}) {
   // Carry the escalation config on the same policy object. resolvePolicy and
   // isInsideWorkspace both pass a policy with `rootCanonical` through unchanged,
   // so the extra fields survive to decidePermission.
+  /** @type {Record<string, any>} */
   const policy = { ...workspace };
   if (typeof scope.escalateReads === "function") policy.escalateReads = scope.escalateReads;
   if (scope.approvedReads) policy.approvedReads = scope.approvedReads;

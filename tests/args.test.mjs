@@ -72,4 +72,33 @@ describe("splitRawArgumentString", () => {
   it("returns empty for empty input", () => {
     assert.deepEqual(splitRawArgumentString(""), []);
   });
+
+  // Audit M7 / task P1-7. Every backslash is treated as an escape and dropped,
+  // so a Windows path in a prompt arrives mangled (`C:\a\b` -> `C:ab`).
+  it(
+    "keeps backslashes that do not escape a quote, a space or another backslash",
+    { todo: "P1-7: only treat \\ as an escape before \", ', \\ or whitespace" },
+    () => {
+      assert.deepEqual(splitRawArgumentString("fix C:\\Users\\me\\app.js"), ["fix", "C:\\Users\\me\\app.js"]);
+      assert.deepEqual(splitRawArgumentString("a\\ b"), ["a b"]);
+      assert.deepEqual(splitRawArgumentString('say \\"hi\\"'), ["say", '"hi"']);
+    }
+  );
+});
+
+// Audit M7 / task P1-7. The companion re-tokenizes argv only when it receives
+// exactly one token, so `task "fix C:\x"` and `task --write "fix C:\x"` parse
+// the same prompt differently. The rule has to be explicit and exported.
+describe("normalizeArgv", () => {
+  it(
+    "re-tokenizes a single packed flag string but never a bare prompt",
+    { todo: "P1-7: export normalizeArgv from args.mjs with the split rule" },
+    async () => {
+      const args = await import("../plugins/copilot/scripts/lib/args.mjs");
+      assert.equal(typeof args.normalizeArgv, "function", "normalizeArgv is not exported yet");
+      assert.deepEqual(args.normalizeArgv(["--base main --background"]), ["--base", "main", "--background"]);
+      assert.deepEqual(args.normalizeArgv(["fix C:\\x\\y.js"]), ["fix C:\\x\\y.js"]);
+      assert.deepEqual(args.normalizeArgv(["--write", "fix C:\\x\\y.js"]), ["--write", "fix C:\\x\\y.js"]);
+    }
+  );
 });

@@ -109,6 +109,32 @@ describe("job-control", () => {
     assert.ok(enriched.duration);
   });
 
+  // Audit M2 / task P1-2. A worker killed by OOM, `kill -9` or a reboot leaves
+  // its job "running" forever; nothing checks whether the pid is alive, and the
+  // stored pid is later handed to `taskkill /T /F`, which may by then belong to
+  // an unrelated process.
+  it(
+    "enrichJob marks a running job whose worker is gone as stale",
+    { todo: "P1-2: liveness check on enrichJob; identity check before terminateProcessTree" },
+    () => {
+      const gone = enrichJob({
+        id: "j-stale",
+        status: "running",
+        jobClass: "task",
+        pid: 999999999,
+        startedAt: new Date(Date.now() - 60000).toISOString()
+      });
+      assert.equal(gone.phase, "stale");
+
+      const alive = enrichJob({ id: "j-alive", status: "running", jobClass: "task", pid: process.pid, startedAt: new Date().toISOString() });
+      assert.notEqual(alive.phase, "stale");
+
+      // Paused jobs have no worker by design and must never look stale.
+      const paused = enrichJob({ id: "j-paused", status: "awaiting-approval", jobClass: "task", pid: null });
+      assert.equal(paused.phase, "awaiting-approval");
+    }
+  );
+
   it("resolveResultJob throws when no jobs exist", () => {
     assert.throws(() => resolveResultJob(tempDir, ""), /No finished/);
   });

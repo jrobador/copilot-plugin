@@ -24,9 +24,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+          cache: npm
 
-      # The Copilot SDK is an optional dependency and needs credentials to do
-      # anything, so the suite runs against the fake fixture without it.
-      - run: npm install --no-optional
+      # `npm ci` enforces the lockfile; `npm install` would happily resolve a
+      # different tree. The Copilot SDK is an optional dependency and needs
+      # credentials to do anything, so the suite runs against the fake fixture
+      # without it.
+      - run: npm ci --omit=optional
 
       - run: npm test
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci --omit=optional
+
+      # JSDoc-typed JavaScript checked by tsc: catches fields that do not exist
+      # (`result.error` on an object that never carries one) without a build step.
+      - run: npm run typecheck

@@ -258,6 +258,7 @@ export function planCommand(request, mode, policy, config = {}) {
   const program = request?.program;
   const rawArgs = request?.args;
   const display = describeCommand(program ?? "(no program)", Array.isArray(rawArgs) ? rawArgs : []);
+  /** @returns {{ok: boolean, program: string|null, argv: string[], reason: string, kind: "command", request: string}} */
   const refuse = (reason) => ({ ok: false, program: null, argv: [], reason, kind: "command", request: display });
 
   if (typeof program !== "string" || program.trim() === "") {
@@ -271,7 +272,9 @@ export function planCommand(request, mode, policy, config = {}) {
   if (rawArgs !== undefined && !Array.isArray(rawArgs)) {
     return refuse("args must be an array of strings.");
   }
-  const args = rawArgs ?? [];
+  // Validated element by element just below; the annotation states the
+  // post-validation shape so the rest of the function reads as strings.
+  const args = /** @type {string[]} */ (rawArgs ?? []);
   if (args.length > LIMITS.maxArgs) {
     return refuse(`too many arguments (${args.length} > ${LIMITS.maxArgs}).`);
   }
@@ -359,6 +362,7 @@ const SCRUB_PATTERN =
  * page or prompt. PATH and the OS essentials are never touched.
  */
 export function scrubEnvironment(env = process.env) {
+  /** @type {NodeJS.ProcessEnv} */
   const scrubbed = {};
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined || SCRUB_PATTERN.test(key)) continue;
@@ -514,6 +518,7 @@ export function executeCommand(plan, options = {}) {
     const collector = createOutputCollector(maxOutputBytes);
     let settled = false;
     let timedOut = false;
+    /** @type {import("node:child_process").ChildProcess|undefined} */
     let child;
     let hardKill = null;
 
@@ -660,6 +665,12 @@ function previewOf(output, lines = 20, maxChars = 2000) {
  * @param {object|string} options.policy   createWorkspacePolicy result or a root path.
  * @param {{extraPrograms?: string[]}} [options.config]
  * @param {(entry: object) => void} [options.onDecision]  Same observer the permission handler uses.
+ * @param {NodeJS.ProcessEnv} [options.env]      Test seam; defaults to process.env.
+ * @param {number} [options.timeoutMs]           Test seam; see LIMITS.
+ * @param {number} [options.maxOutputBytes]      Test seam; see LIMITS.
+ * @param {string} [options.platform]            Test seam; defaults to process.platform.
+ * @param {string} [options.execPath]            Test seam; defaults to process.execPath.
+ * @param {string} [options.comspec]             Test seam; defaults to env.ComSpec.
  */
 export function createRunCommandTool(options) {
   const mode = normalizeMode(options.mode);

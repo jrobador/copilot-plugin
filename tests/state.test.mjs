@@ -120,6 +120,27 @@ describe("state", () => {
     assert.ok(saved.jobs.length >= 50);
   });
 
+  // Audit M4 / task P1-1. A half-written or truncated state.json (three
+  // detached workers and the hooks all write it with a plain writeFileSync)
+  // parses as "no state", and the next upsert persists that emptiness: every
+  // other job record is silently dropped from the index.
+  it(
+    "does not wipe the job index when state.json is unreadable",
+    { todo: "P1-1: atomic tmp+rename writes; quarantine a corrupt file instead of replacing it" },
+    () => {
+      upsertJob(tempDir, { id: "survivor", status: "completed", title: "must survive" });
+      const stateFile = path.join(resolveStateDir(tempDir), "state.json");
+      const raw = fs.readFileSync(stateFile, "utf8");
+      fs.writeFileSync(stateFile, raw.slice(0, Math.floor(raw.length / 2)), "utf8");
+
+      upsertJob(tempDir, { id: "newcomer", status: "queued" });
+
+      const ids = listJobs(tempDir).map((job) => job.id);
+      assert.ok(ids.includes("newcomer"));
+      assert.ok(ids.includes("survivor"), `survivor was dropped; index now has ${JSON.stringify(ids)}`);
+    }
+  );
+
   it("keeps queued and running jobs through a prune storm", () => {
     const state = { version: 1, config: {}, jobs: [] };
     state.jobs.push({ id: "queued-1", status: "queued", updatedAt: new Date(0).toISOString() });

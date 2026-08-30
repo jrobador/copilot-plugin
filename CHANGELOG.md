@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.1 — unreleased
+
+Hardening release driven by an audit of 0.1.0. Nothing here changes what the
+commands do; it changes what can go wrong while they do it.
+
+### Added
+
+- `/copilot:approve` and `/copilot:deny` for jobs that paused on a permission
+  the owner should decide (`awaiting-approval`). A paused job keeps its Copilot
+  session and resumes where it stopped once approved; denying closes it. The
+  v1 trigger is a sentinel filename (`ESCALATE_ME.txt`, overridable with
+  `COPILOT_ESCALATE_SENTINEL`).
+- `npm run typecheck`: the JSDoc-typed sources are checked with `tsc` in CI.
+
+### Tests
+
+- Regression tests for every open audit finding land first, marked `todo`
+  with the task that closes them, so the suite stays green while documenting
+  what is still broken: shell injection through git refs on Windows, the
+  unbounded review diff, backslashes eaten by the argument tokenizer,
+  colliding session ids, unprotected `.claude/`, a corrupt `state.json`
+  wiping the job index, and stale "running" jobs.
+- CI installs with `npm ci` (lockfile enforced) instead of `npm install`.
+
 ## 0.1.0 — unreleased
 
 First release of this fork. Seeded from

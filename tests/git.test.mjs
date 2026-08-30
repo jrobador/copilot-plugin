@@ -89,4 +89,45 @@ describe("git", () => {
     assert.ok(context.content);
     fs.unlinkSync(path.join(tempDir, "review.txt"));
   });
+
+  // Audit H1 / task P0-1. Git accepts `|`, `&`, `;` and `$()` in ref names, and
+  // the default branch name comes from the remote. Refs must be validated
+  // before they are handed to any process.
+  it(
+    "assertSafeRef rejects refs carrying shell metacharacters",
+    { todo: "P0-1: export assertSafeRef from git.mjs and apply it to --base and detectDefaultBranch" },
+    async () => {
+      const git = await import("../plugins/copilot/scripts/lib/git.mjs");
+      assert.equal(typeof git.assertSafeRef, "function", "assertSafeRef is not exported yet");
+      for (const bad of ["main|calc", "main&calc", "main;calc", "main$(x)", "main`x`", "a b"]) {
+        assert.throws(() => git.assertSafeRef(bad), /unsafe|invalid/i, bad);
+      }
+      for (const good of ["main", "origin/main", "feature/x-1", "v1.2.3", "HEAD"]) {
+        assert.equal(git.assertSafeRef(good), good);
+      }
+    }
+  );
+
+  // Audit M5 / task P1-5. The diff is pasted whole into the prompt; only
+  // untracked files have a size cap. A 1 MB change to a tracked file must be
+  // truncated with a marker instead of shipped verbatim.
+  it(
+    "collectReviewContext caps the diff size and marks the truncation",
+    { todo: "P1-5: drop --binary, cap per-file and total diff bytes" },
+    async () => {
+      const git = await import("../plugins/copilot/scripts/lib/git.mjs");
+      assert.ok(Number.isInteger(git.MAX_DIFF_BYTES), "MAX_DIFF_BYTES is not exported yet");
+      const big = path.join(tempDir, "file.txt");
+      const original = fs.readFileSync(big);
+      fs.writeFileSync(big, "x".repeat(1024 * 1024));
+      try {
+        const target = resolveReviewTarget(tempDir, { scope: "working-tree" });
+        const context = collectReviewContext(tempDir, target);
+        assert.ok(context.content.length < git.MAX_DIFF_BYTES + 4096, `content is ${context.content.length} bytes`);
+        assert.match(context.content, /truncated/i);
+      } finally {
+        fs.writeFileSync(big, original);
+      }
+    }
+  );
 });

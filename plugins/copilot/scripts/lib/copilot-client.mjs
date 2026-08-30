@@ -7,6 +7,8 @@
  */
 
 import { createRequire } from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { binaryAvailable } from "./process.mjs";
 import { createWorkspacePolicy } from "./paths.mjs";
@@ -41,7 +43,29 @@ function shorten(text, limit = 72) {
   return `${normalized.slice(0, limit - 3)}...`;
 }
 
+/**
+ * Test seam: a module path that stands in for @github/copilot-sdk. It must
+ * export `CopilotClient` with the same surface. Lets the whole CLI run against
+ * tests/fake-copilot-fixture.mjs in a spawned process, without a Copilot login.
+ */
+export const SDK_MODULE_ENV = "COPILOT_COMPANION_SDK_MODULE";
+
+function sdkOverride() {
+  const override = process.env[SDK_MODULE_ENV];
+  return override && override.trim() ? override.trim() : null;
+}
+
 async function loadSdk() {
+  const override = sdkOverride();
+  if (override) {
+    try {
+      return await import(pathToFileURL(path.resolve(override)).href);
+    } catch (error) {
+      throw Object.assign(new Error(`${SDK_MODULE_ENV} points at ${override}, which could not be loaded (${error.message})`), {
+        code: "SDK_MISSING"
+      });
+    }
+  }
   try {
     return await import("@github/copilot-sdk");
   } catch (error) {
@@ -147,6 +171,17 @@ export function buildSessionConfig(options, permissionMode, sink) {
  * @param {string} [options.sessionId]        Set to make the session resumable.
  * @param {string} [options.permissionMode]   READ_ONLY (default) or WORKSPACE_WRITE.
  * @param {Function} [options.onPermissionDecision]  Observer for allow/deny logging.
+ * @param {string} [options.systemMessage]    Appended to the runtime's system prompt.
+ * @param {string[]} [options.availableTools]
+ * @param {string[]} [options.excludedTools]
+ * @param {(relativePosix: string) => boolean} [options.escalateReads]
+ *   Reads the owner wants to be consulted on; see permissions.mjs.
+ * @param {Set<string>|string[]} [options.approvedReads]
+ *   Reads a prior escalation already approved.
+ * @param {boolean} [options.allowFreshFallback]
+ *   resumeSession only: false makes a missing session report `resumed: false`
+ *   with no session instead of starting a fresh one.
+ * @param {string} [options.logLevel]
  */
 export async function createSession(options = {}) {
   const cwd = options.cwd ?? process.cwd();
@@ -369,6 +404,11 @@ export async function abortSession(session) {
  * command behind an install step the user did not need.
  */
 export function getCopilotAvailability(cwd) {
+  const override = sdkOverride();
+  if (override) {
+    return { available: true, detail: `fake runtime (${SDK_MODULE_ENV}=${override})`, source: "override" };
+  }
+
   const onPath = binaryAvailable("copilot", ["--version"], { cwd });
   if (onPath.available) {
     return { ...onPath, source: "path" };
@@ -514,6 +554,9 @@ export { DEFAULT_CONTINUE_PROMPT, TASK_SESSION_PREFIX, SESSION_ID_ENV, READ_ONLY
  * The stored result of a task job. Carries what the permission handler saw
  * during the turn, so the report can say which files changed and what was
  * refused instead of pretending nothing was.
+ *
+ * @param {object} result  What runPrompt returned.
+ * @param {{sessionId?: string|null, rawOutput?: string, unsafeShell?: boolean}} [meta]
  */
 export function buildTaskPayload(result, { sessionId, rawOutput, unsafeShell } = {}) {
   const output = rawOutput ?? result?.content ?? "";

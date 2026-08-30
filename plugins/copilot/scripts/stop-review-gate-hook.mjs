@@ -4,7 +4,7 @@ import fs from "node:fs";
 import process from "node:process";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { getCopilotAvailability } from "./lib/copilot-client.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
@@ -73,7 +73,7 @@ function buildSetupNote(cwd) {
   return null;
 }
 
-function parseStopReviewOutput(rawOutput) {
+export function parseStopReviewOutput(rawOutput) {
   const text = String(rawOutput ?? "").trim();
   if (!text) {
     return {
@@ -102,21 +102,30 @@ function parseStopReviewOutput(rawOutput) {
   };
 }
 
-function runStopReview(cwd, input = {}) {
+/**
+ * Run the stop-gate review as a companion `task` and interpret its answer.
+ *
+ * @param {string} cwd
+ * @param {object} [input]  The hook's stdin payload.
+ * @param {{spawnImpl?: typeof spawnSync}} [seams]  Test seam for the child process.
+ * @returns {{ok: boolean, reason: string|null}}
+ */
+export function runStopReview(cwd, input = {}, seams = {}) {
+  const spawnImpl = seams.spawnImpl ?? spawnSync;
   const scriptPath = path.join(SCRIPT_DIR, "copilot-companion.mjs");
   const prompt = buildStopReviewPrompt(input);
   const childEnv = {
     ...process.env,
     ...(input.session_id ? { [SESSION_ID_ENV]: input.session_id } : {})
   };
-  const result = spawnSync(process.execPath, [scriptPath, "task", "--json", prompt], {
+  const result = spawnImpl(process.execPath, [scriptPath, "task", "--json", prompt], {
     cwd,
     env: childEnv,
     encoding: "utf8",
     timeout: STOP_REVIEW_TIMEOUT_MS
   });
 
-  if (result.error?.code === "ETIMEDOUT") {
+  if (/** @type {NodeJS.ErrnoException|undefined} */ (result.error)?.code === "ETIMEDOUT") {
     return {
       ok: false,
       reason:
@@ -146,7 +155,25 @@ function runStopReview(cwd, input = {}) {
   }
 }
 
-function main() {
+/**
+ * What the hook tells Claude Code about a finished review: a block decision,
+ * or null to let the stop proceed.
+ *
+ * @param {{ok: boolean, reason: string|null}} review
+ * @param {string|null} [runningTaskNote]
+ * @returns {{decision: "block", reason: string}|null}
+ */
+export function decideStop(review, runningTaskNote = null) {
+  if (review.ok) {
+    return null;
+  }
+  return {
+    decision: "block",
+    reason: runningTaskNote ? `${runningTaskNote} ${review.reason}` : review.reason
+  };
+}
+
+export function main() {
   const input = readHookInput();
   const cwd = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const workspaceRoot = resolveWorkspaceRoot(cwd);
@@ -171,15 +198,18 @@ function main() {
   }
 
   const review = runStopReview(cwd, input);
-  if (!review.ok) {
-    emitDecision({
-      decision: "block",
-      reason: runningTaskNote ? `${runningTaskNote} ${review.reason}` : review.reason
-    });
+  const stop = decideStop(review, runningTaskNote);
+  if (stop) {
+    emitDecision(stop);
     return;
   }
 
   logNote(runningTaskNote);
 }
 
-main();
+// Only run as a hook when executed directly; tests import the pieces above.
+const isEntrypoint =
+  Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isEntrypoint) {
+  main();
+}

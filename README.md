@@ -53,6 +53,26 @@ If you are not signed in:
 `--with-token` to read a token from stdin. Authentication is shared with the
 `gh` CLI, so if you are already signed in there you are likely done.
 
+### Known issues (0.1.1-dev)
+
+Being fixed in this release; until then:
+
+- **Fresh installs may not find the runtime.** The plugin as installed from
+  the marketplace does not ship `@github/copilot-sdk`. If `/copilot:setup`
+  says the SDK is not installed, run `npm install @github/copilot-sdk` in the
+  plugin directory (`~/.claude/plugins/cache/copilot-plugin-cc/copilot/<version>`)
+  and retry.
+- **On Windows, do not review untrusted repositories yet.** Git refs are passed
+  through `cmd.exe`; a remote whose default branch name contains shell
+  metacharacters could run a command. Use `--base <ref>` with a name you typed
+  yourself, or wait for the fix.
+- **`--resume` starts a fresh Copilot thread** instead of continuing the
+  previous one. Ask for the same work again in prose if context matters.
+- **The review gate blocks the session end on any failure**, including a
+  logged-out Copilot. If it loops, run `/copilot:setup --disable-review-gate`.
+- **Rescue asks Copilot to edit by default.** Say "read-only" in the request
+  to keep it from touching files.
+
 A first run:
 
 ```bash

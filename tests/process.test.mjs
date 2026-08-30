@@ -32,6 +32,19 @@ describe("runCommand", () => {
     assert.match(result.stdout, /hello/);
   });
 
+  // Audit H1 / task P0-1. On Windows every runCommand goes through cmd.exe
+  // (`shell: true`), which re-parses the joined arguments: a git ref carrying
+  // `&&` runs a second command. Refs come from the user (`--base`) and from the
+  // remote (origin/HEAD), so this is an injection, not a quoting nit.
+  it(
+    "does not let an argument reach a shell (git ref with && must not execute)",
+    { todo: "P0-1: run git without shell; shell only for .cmd/.bat shims", skip: process.platform !== "win32" },
+    () => {
+      const result = runCommand("git", ["rev-parse", "HEAD&&echo INJECTED_VIA_SHELL"], { cwd: process.cwd() });
+      assert.ok(!result.stdout.includes("INJECTED_VIA_SHELL"), "argument was interpreted by a shell");
+    }
+  );
+
   it("fails for a missing binary", () => {
     // The shape of the failure is platform-dependent: POSIX surfaces spawn's
     // ENOENT, while on Windows the command goes through cmd.exe, which reports

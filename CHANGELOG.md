@@ -16,6 +16,15 @@ commands do; it changes what can go wrong while they do it.
   only with constant arguments, and every ref -- `--base` and the name behind
   `origin/HEAD` -- is validated (`assertSafeRef`) before it is used.
 
+### Fixed
+
+- Background jobs could stay `queued` forever. The detached worker was
+  spawned before its job record was written, so a fast worker found nothing,
+  died with its stderr discarded, and the job never moved. The record is
+  now written first, for both `task --background` and `/copilot:approve`,
+  and a worker that cannot read or use its record marks the job `failed`
+  with the reason instead of exiting silently.
+
 ### Added
 
 - `/copilot:approve` and `/copilot:deny` for jobs that paused on a permission

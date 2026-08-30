@@ -379,17 +379,24 @@ export function enqueueBackgroundTask(cwd, job, request, seams = {}) {
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
 
-  const child = spawnDetachedTaskWorker(cwd, job.id, seams.spawnImpl);
+  // The worker reads this record as its first act, so it has to exist before
+  // the worker does; spawning first left a fast worker with nothing to read
+  // and a job that stayed "queued" forever. The pid is patched into the index
+  // once the spawn returns. The job file is not rewritten afterwards: the
+  // worker may already have replaced it with its "running" record.
   const queuedRecord = {
     ...job,
     status: "queued",
     phase: "queued",
-    pid: child.pid ?? null,
+    pid: null,
     logFile,
     request
   };
   writeJobFile(job.workspaceRoot, job.id, queuedRecord);
   upsertJob(job.workspaceRoot, queuedRecord);
+
+  const child = spawnDetachedTaskWorker(cwd, job.id, seams.spawnImpl);
+  upsertJob(job.workspaceRoot, { id: job.id, pid: child.pid ?? null });
 
   return {
     payload: {
@@ -524,25 +531,46 @@ async function handleTask(argv) {
   );
 }
 
+/**
+ * A detached worker has no stdout anyone reads. Whatever stops it before
+ * runTrackedJob takes over has to land on the job record, or the job stays
+ * "queued" forever with nothing to explain why.
+ */
+function markWorkerFailure(workspaceRoot, jobId, errorMessage, storedJob = null) {
+  const completedAt = nowIso();
+  const patch = { id: jobId, status: "failed", phase: "failed", pid: null, errorMessage, completedAt };
+  try {
+    writeJobFile(workspaceRoot, jobId, { ...(storedJob ?? {}), ...patch });
+    upsertJob(workspaceRoot, patch);
+  } catch {
+    // Best effort: the error is rethrown by the caller either way.
+  }
+}
+
 export async function handleTaskWorker(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd", "job-id"]
   });
 
-  if (!options["job-id"]) {
+  const jobId = options["job-id"];
+  if (!jobId) {
     throw new Error("Missing required --job-id for task-worker.");
   }
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const storedJob = readStoredJob(workspaceRoot, options["job-id"]);
+  const storedJob = readStoredJob(workspaceRoot, jobId);
   if (!storedJob) {
-    throw new Error(`No stored job found for ${options["job-id"]}.`);
+    const message = `No stored job found for ${jobId}.`;
+    markWorkerFailure(workspaceRoot, jobId, message);
+    throw new Error(message);
   }
 
   const request = storedJob.request;
   if (!request || typeof request !== "object") {
-    throw new Error(`Stored job ${options["job-id"]} is missing its task request payload.`);
+    const message = `Stored job ${jobId} is missing its task request payload.`;
+    markWorkerFailure(workspaceRoot, jobId, message, storedJob);
+    throw new Error(message);
   }
 
   const { logFile, progress } = createTrackedProgress(
@@ -685,25 +713,31 @@ export async function handleApprove(argv, seams = {}) {
     throw new Error(`Job ${job.id} cannot be resumed: it is missing the Copilot session to revive.`);
   }
 
-  // Re-arm the job as queued and hand it to a detached worker that resumes the
-  // session, allows the approved path, and re-instructs the model.
-  const child = spawnDetachedApproveWorker(cwd, job.id, seams.spawnImpl);
+  // Re-arm the job as queued, then hand it to a detached worker that resumes
+  // the session, allows the approved path, and re-instructs the model. The
+  // record is written first for the same reason as in enqueueBackgroundTask.
   appendLogLine(job.logFile, `Approved by owner: ${job.pendingApproval?.request ?? "request"}.`);
+  const existing = readStoredJob(workspaceRoot, job.id) ?? {};
+  const approvedAt = nowIso();
   const queuedRecord = {
+    ...existing,
     ...job,
     status: "queued",
     phase: "queued",
-    pid: child.pid ?? null,
-    approvedAt: nowIso()
+    pid: null,
+    approvedAt
   };
   writeJobFile(workspaceRoot, job.id, queuedRecord);
   upsertJob(workspaceRoot, {
     id: job.id,
     status: "queued",
     phase: "queued",
-    pid: child.pid ?? null,
-    approvedAt: queuedRecord.approvedAt
+    pid: null,
+    approvedAt
   });
+
+  const child = spawnDetachedApproveWorker(cwd, job.id, seams.spawnImpl);
+  upsertJob(workspaceRoot, { id: job.id, pid: child.pid ?? null });
 
   const payload = { jobId: job.id, status: "resuming", title: job.title };
   outputCommandResult(
@@ -715,18 +749,23 @@ export async function handleApprove(argv, seams = {}) {
 
 export async function handleApproveWorker(argv) {
   const { options } = parseCommandInput(argv, { valueOptions: ["cwd", "job-id"] });
-  if (!options["job-id"]) {
+  const jobId = options["job-id"];
+  if (!jobId) {
     throw new Error("Missing required --job-id for approve-worker.");
   }
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const storedJob = readStoredJob(workspaceRoot, options["job-id"]);
+  const storedJob = readStoredJob(workspaceRoot, jobId);
   if (!storedJob) {
-    throw new Error(`No stored job found for ${options["job-id"]}.`);
+    const message = `No stored job found for ${jobId}.`;
+    markWorkerFailure(workspaceRoot, jobId, message);
+    throw new Error(message);
   }
   if (!storedJob.revive || !storedJob.copilotSessionId) {
-    throw new Error(`Stored job ${options["job-id"]} has no revive context.`);
+    const message = `Stored job ${jobId} has no revive context.`;
+    markWorkerFailure(workspaceRoot, jobId, message, storedJob);
+    throw new Error(message);
   }
 
   const { logFile, progress } = createTrackedProgress(

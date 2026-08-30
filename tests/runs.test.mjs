@@ -21,7 +21,13 @@ import {
   writeJobFile
 } from "../plugins/copilot/scripts/lib/state.mjs";
 import { createJobRecord, runTrackedJob, SESSION_ID_ENV } from "../plugins/copilot/scripts/lib/tracked-jobs.mjs";
-import { enqueueBackgroundTask, handleApprove, handleCancel } from "../plugins/copilot/scripts/copilot-companion.mjs";
+import {
+  enqueueBackgroundTask,
+  handleApprove,
+  handleApproveWorker,
+  handleCancel,
+  handleTaskWorker
+} from "../plugins/copilot/scripts/copilot-companion.mjs";
 
 const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fake-copilot-fixture.mjs");
 const CLAUDE_SESSION = "claude-session-for-runs-test";
@@ -217,13 +223,10 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
     assert.equal(readStoredJob(tempDir, job.id).status, "expired");
   });
 
-  // Audit M1 / task P0-5. The detached worker is spawned before its job file
-  // is written; a fast worker finds nothing and dies silently, leaving the job
-  // "queued" forever.
-  it(
-    "enqueue: the job file exists before the task worker is spawned",
-    { todo: "P0-5: write the job record before spawning the worker" },
-    () => {
+  // Audit M1 / task P0-5. The detached worker used to be spawned before its
+  // job file was written; a fast worker found nothing and died silently,
+  // leaving the job "queued" forever.
+  it("enqueue: the job file exists before the task worker is spawned", () => {
       const job = taskJob("task-bg-1");
       let seenAtSpawn = null;
       const spawnImpl = (_file, args) => {
@@ -236,14 +239,29 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
 
       assert.equal(payload.status, "queued");
       assert.equal(seenAtSpawn, true, "job file must exist before the worker is spawned");
-      assert.equal(readStoredJob(tempDir, job.id).pid, 4242);
-    }
-  );
+      assert.equal(listJobs(tempDir).find((entry) => entry.id === job.id).pid, 4242, "the pid is recorded in the index");
+      assert.equal(readStoredJob(tempDir, job.id).request.prompt, "bg");
+  });
 
-  it(
-    "approve: the job is re-armed as queued before the approve worker is spawned",
-    { todo: "P0-5: write the job record before spawning the worker" },
-    async () => {
+  it("worker: a job it cannot read or use is marked failed instead of staying queued", async () => {
+    await assert.rejects(() => handleTaskWorker(["--cwd", tempDir, "--job-id", "task-missing"]), /No stored job found/);
+    assert.equal(listJobs(tempDir).find((entry) => entry.id === "task-missing").status, "failed");
+
+    const noRequest = { ...taskJob("task-no-request"), status: "queued" };
+    writeJobFile(tempDir, noRequest.id, noRequest);
+    upsertJob(tempDir, noRequest);
+    await assert.rejects(() => handleTaskWorker(["--cwd", tempDir, "--job-id", noRequest.id]), /missing its task request/);
+    assert.equal(readStoredJob(tempDir, noRequest.id).status, "failed");
+    assert.match(readStoredJob(tempDir, noRequest.id).errorMessage, /missing its task request/);
+
+    const noRevive = { ...taskJob("task-no-revive"), status: "queued", copilotSessionId: "x" };
+    writeJobFile(tempDir, noRevive.id, noRevive);
+    upsertJob(tempDir, noRevive);
+    await assert.rejects(() => handleApproveWorker(["--cwd", tempDir, "--job-id", noRevive.id]), /no revive context/);
+    assert.equal(listJobs(tempDir).find((entry) => entry.id === noRevive.id).status, "failed");
+  });
+
+  it("approve: the job is re-armed as queued before the approve worker is spawned", async () => {
       const id = "task-appr-1";
       const record = {
         ...taskJob(id),
@@ -264,8 +282,9 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
 
       assert.equal(readStoredJob(tempDir, id).status, "queued");
       assert.equal(recordAtSpawn.status, "queued", "the job must be re-armed before the worker is spawned");
-    }
-  );
+      assert.equal(recordAtSpawn.copilotSessionId, "sess-appr", "the revive context survives the re-arm");
+      assert.equal(listJobs(tempDir).find((entry) => entry.id === id).pid, 4243);
+  });
 
   it("cancel: closes a queued job and a paused job without a live worker", async () => {
     for (const [id, status] of [

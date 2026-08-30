@@ -9,6 +9,7 @@
     "node": ">=20.0.0"
   },
   "optionalDependencies": {
-    "@github/copilot-sdk": "1.0.11"
+    "@github/copilot-sdk": "1.0.11",
+    "@github/copilot": "1.0.80"
   }
 }

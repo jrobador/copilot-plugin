@@ -29,7 +29,11 @@ audit left open ships with a regression test.
   declared in `plugins/copilot/package.json` (with its lockfile), and
   `/copilot:setup --install-runtime` installs it into the plugin directory;
   `/copilot:setup` offers to do so whenever it is missing. One remediation
-  message, everywhere.
+  message, everywhere. The CLI package is pinned (`@github/copilot` 1.0.80)
+  next to the SDK (1.0.11): the SDK's `^1.0.79` range pulled in 1.0.82, whose
+  platform package no longer exports the `./sdk` entry the SDK resolves, so
+  the two installed cleanly and then could not find each other. The
+  installed-copy test now asserts that the runtime starts, not just resolves.
 - `--resume` never resumed anything. The job recorded the **Claude Code**
   session id under `sessionId`, and the resume path handed that to Copilot as
   if it were the Copilot session id, so every continuation failed and started

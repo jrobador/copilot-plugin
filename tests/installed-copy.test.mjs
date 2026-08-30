@@ -98,6 +98,11 @@ describe("installed copy of the plugin", () => {
       assert.ok(report.actionsTaken.some((action) => /Installed the Copilot runtime/.test(action)), JSON.stringify(report.actionsTaken));
       assert.ok(fs.existsSync(path.join(installed, "node_modules", "@github", "copilot-sdk", "package.json")));
       assert.equal(report.copilot.available, true, "the SDK bundles the CLI");
+      // The runtime must actually start, not merely resolve: SDK 1.0.11 and
+      // CLI 1.0.82 install side by side and then fail to find each other
+      // (the platform package dropped the ./sdk export). The pin in
+      // plugins/copilot/package.json exists because of this assertion.
+      assert.equal(report.auth.available, true, `runtime did not start: ${report.auth.detail}`);
 
       const again = companion(["setup", "--json"]);
       const second = JSON.parse(again.stdout);

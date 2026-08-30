@@ -339,8 +339,12 @@ npm run typecheck
 ```
 
 The runtime lives in `plugins/copilot/package.json`, not the root one, because
-`plugins/copilot` is what the marketplace ships. The suite runs without it
-against `tests/fake-copilot-fixture.mjs` (`COPILOT_COMPANION_SDK_MODULE`).
+`plugins/copilot` is what the marketplace ships. Both the SDK and the CLI
+package are pinned there: they are released separately and have already
+drifted apart once (SDK 1.0.11 cannot start CLI 1.0.82). Bump them together
+and let `tests/installed-copy.test.mjs` prove the pair starts. The suite
+otherwise runs without the runtime, against `tests/fake-copilot-fixture.mjs`
+(`COPILOT_COMPANION_SDK_MODULE`).
 
 ## Credits
 

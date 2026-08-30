@@ -5,6 +5,17 @@
 Hardening release driven by an audit of 0.1.0. Nothing here changes what the
 commands do; it changes what can go wrong while they do it.
 
+### Security
+
+- **Git refs no longer reach a shell.** On Windows every child process went
+  through cmd.exe (`shell: true`), which re-parses the joined arguments, and
+  git accepts `&`, `|`, `;` and `$()` in ref names. A remote whose default
+  branch was called `main|calc` would have run `calc` on the next
+  `/copilot:review` with a clean tree; `--base` had the same hole. Programs
+  are now spawned directly, with cmd.exe used only for `.cmd`/`.bat` shims and
+  only with constant arguments, and every ref -- `--base` and the name behind
+  `origin/HEAD` -- is validated (`assertSafeRef`) before it is used.
+
 ### Added
 
 - `/copilot:approve` and `/copilot:deny` for jobs that paused on a permission

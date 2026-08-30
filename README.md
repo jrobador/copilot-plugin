@@ -62,10 +62,6 @@ Being fixed in this release; until then:
   says the SDK is not installed, run `npm install @github/copilot-sdk` in the
   plugin directory (`~/.claude/plugins/cache/copilot-plugin-cc/copilot/<version>`)
   and retry.
-- **On Windows, do not review untrusted repositories yet.** Git refs are passed
-  through `cmd.exe`; a remote whose default branch name contains shell
-  metacharacters could run a command. Use `--base <ref>` with a name you typed
-  yourself, or wait for the fix.
 - **`--resume` starts a fresh Copilot thread** instead of continuing the
   previous one. Ask for the same work again in prose if context matters.
 - **The review gate blocks the session end on any failure**, including a

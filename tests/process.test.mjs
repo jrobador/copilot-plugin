@@ -27,23 +27,40 @@ describe("resolveBinary", () => {
 
 describe("runCommand", () => {
   it("returns stdout for successful command", () => {
-    const result = runCommand("echo", ["hello"]);
+    // `node` rather than `echo`: without a shell there is no echo builtin on Windows.
+    const result = runCommand("node", ["-e", "console.log('hello')"]);
     assert.equal(result.status, 0);
     assert.match(result.stdout, /hello/);
   });
 
-  // Audit H1 / task P0-1. On Windows every runCommand goes through cmd.exe
+  // Audit H1 / task P0-1. On Windows every runCommand went through cmd.exe
   // (`shell: true`), which re-parses the joined arguments: a git ref carrying
-  // `&&` runs a second command. Refs come from the user (`--base`) and from the
-  // remote (origin/HEAD), so this is an injection, not a quoting nit.
-  it(
-    "does not let an argument reach a shell (git ref with && must not execute)",
-    { todo: "P0-1: run git without shell; shell only for .cmd/.bat shims", skip: process.platform !== "win32" },
-    () => {
-      const result = runCommand("git", ["rev-parse", "HEAD&&echo INJECTED_VIA_SHELL"], { cwd: process.cwd() });
-      assert.ok(!result.stdout.includes("INJECTED_VIA_SHELL"), "argument was interpreted by a shell");
+  // `&&` ran a second command. Refs come from the user (`--base`) and from the
+  // remote (origin/HEAD), so this was an injection, not a quoting nit.
+  it("does not let an argument reach a shell (git ref with && must not execute)", () => {
+    const result = runCommand("git", ["rev-parse", "HEAD&&echo INJECTED_VIA_SHELL"], { cwd: process.cwd() });
+    // git echoes an unknown ref back verbatim; a shell would print the echo's
+    // output as a line of its own.
+    const lines = result.stdout.split(/\r?\n/).map((line) => line.trim());
+    assert.ok(!lines.includes("INJECTED_VIA_SHELL"), "argument was interpreted by a shell");
+    assert.notEqual(result.status, 0, "git should reject the bogus ref");
+  });
+
+  it("passes arguments with spaces and quotes through untouched", () => {
+    const result = runCommand("node", ["-e", "console.log(JSON.stringify(process.argv.slice(1)))", "a b", "\"quoted\"", "%PATH%", "$HOME"]);
+    assert.equal(result.status, 0);
+    assert.deepEqual(JSON.parse(result.stdout), ["a b", "\"quoted\"", "%PATH%", "$HOME"]);
+  });
+
+  it("still runs .cmd shims on Windows through cmd.exe", { skip: process.platform !== "win32" }, (t) => {
+    if (!resolveBinary("npm")) {
+      t.skip("npm not on PATH");
+      return;
     }
-  );
+    const result = runCommand("npm", ["--version"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^\d+\.\d+/);
+  });
 
   it("fails for a missing binary", () => {
     // The shape of the failure is platform-dependent: POSIX surfaces spawn's
@@ -86,12 +103,16 @@ describe("binaryAvailable", () => {
 
 describe("runCommandChecked", () => {
   it("returns result for successful command", () => {
-    const result = runCommandChecked("echo", ["hello"]);
+    const result = runCommandChecked("node", ["-e", "console.log('hello')"]);
     assert.match(result.stdout, /hello/);
   });
 
   it("throws for failed command", () => {
-    assert.throws(() => runCommandChecked("false"), /exit=1|exit=255/);
+    assert.throws(() => runCommandChecked("node", ["-e", "process.exit(1)"]), /exit=1/);
+  });
+
+  it("throws ENOENT for a missing binary", () => {
+    assert.throws(() => runCommandChecked("nonexistent-binary-xyz"), (error) => error.code === "ENOENT");
   });
 });
 

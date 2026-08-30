@@ -30,12 +30,45 @@ export function getRepoRoot(cwd) {
   return gitChecked(cwd, ["rev-parse", "--show-toplevel"]).stdout.trim();
 }
 
+/**
+ * Characters git allows in a ref name but no process boundary should see:
+ * shell metacharacters, quotes, whitespace. A ref also must not look like an
+ * option, or git itself would parse it as one.
+ */
+const UNSAFE_REF_CHARS = /[\s&|;<>^$()%!`"'\\]/;
+
+/**
+ * Validate a ref before it is handed to any process. Refs come from the user
+ * (`--base`) and from the remote (`origin/HEAD`), so the check is the only
+ * thing between a hostile branch name and a command line.
+ *
+ * @param {unknown} ref
+ * @param {string} [cwd]  When given, git's own `check-ref-format` runs too.
+ * @returns {string} The ref, trimmed.
+ */
+export function assertSafeRef(ref, cwd) {
+  const text = String(ref ?? "").trim();
+  if (!text || text.startsWith("-") || UNSAFE_REF_CHARS.test(text)) {
+    throw new Error(
+      `Refusing to use ${JSON.stringify(String(ref))} as a git ref: it is empty, looks like an option, or contains shell metacharacters (unsafe ref).`
+    );
+  }
+  if (cwd) {
+    const check = git(cwd, ["check-ref-format", "--allow-onelevel", text]);
+    if (check.status !== 0 && !check.error) {
+      throw new Error(`${JSON.stringify(text)} is not a valid git ref name (invalid ref).`);
+    }
+  }
+  return text;
+}
+
 export function detectDefaultBranch(cwd) {
   const symbolic = git(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
   if (symbolic.status === 0) {
     const remoteHead = symbolic.stdout.trim();
     if (remoteHead.startsWith("refs/remotes/origin/")) {
-      return remoteHead.replace("refs/remotes/origin/", "");
+      // The remote chose this name. Validate it like user input.
+      return assertSafeRef(remoteHead.replace("refs/remotes/origin/", ""), cwd);
     }
   }
 
@@ -75,7 +108,7 @@ export function resolveReviewTarget(cwd, options = {}) {
   ensureGitRepository(cwd);
 
   const requestedScope = options.scope ?? "auto";
-  const baseRef = options.base ?? null;
+  const baseRef = options.base ? assertSafeRef(options.base, cwd) : null;
   const state = getWorkingTreeState(cwd);
   const supportedScopes = new Set(["auto", "working-tree", "branch"]);
 

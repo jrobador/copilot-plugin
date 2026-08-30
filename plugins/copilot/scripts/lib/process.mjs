@@ -78,14 +78,28 @@ export function resolveBinary(command, env = process.env) {
   return null;
 }
 
+/** Windows launchers that only cmd.exe can run. */
+const SHELL_SHIM = /\.(cmd|bat)$/i;
+
+/**
+ * Run one program with an argument list.
+ *
+ * No shell, on any platform, unless the program is a `.cmd`/`.bat` shim that
+ * Node cannot spawn directly (npm, copilot). Everything else -- git.exe,
+ * node.exe, taskkill.exe -- is spawned as-is, so an argument is never
+ * re-parsed by cmd.exe: a git ref carrying `&&` stays a ref. The shim path is
+ * only ever used with constant arguments (`--version`).
+ */
 export function runCommand(command, args = [], options = {}) {
-  const result = spawnSync(command, args, {
+  const resolved = resolveBinary(command, options.env ?? process.env);
+  const useShell = process.platform === "win32" && SHELL_SHIM.test(resolved ?? command);
+  const result = spawnSync(resolved ?? command, args, {
     cwd: options.cwd,
     env: options.env,
     encoding: "utf8",
     input: options.input,
     stdio: options.stdio ?? "pipe",
-    shell: process.platform === "win32",
+    shell: useShell,
     windowsHide: true
   });
 

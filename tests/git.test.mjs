@@ -2,10 +2,11 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 
 import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
 import {
+  assertSafeRef,
   ensureGitRepository,
   getRepoRoot,
   detectDefaultBranch,
@@ -91,22 +92,39 @@ describe("git", () => {
   });
 
   // Audit H1 / task P0-1. Git accepts `|`, `&`, `;` and `$()` in ref names, and
-  // the default branch name comes from the remote. Refs must be validated
-  // before they are handed to any process.
-  it(
-    "assertSafeRef rejects refs carrying shell metacharacters",
-    { todo: "P0-1: export assertSafeRef from git.mjs and apply it to --base and detectDefaultBranch" },
-    async () => {
-      const git = await import("../plugins/copilot/scripts/lib/git.mjs");
-      assert.equal(typeof git.assertSafeRef, "function", "assertSafeRef is not exported yet");
-      for (const bad of ["main|calc", "main&calc", "main;calc", "main$(x)", "main`x`", "a b"]) {
-        assert.throws(() => git.assertSafeRef(bad), /unsafe|invalid/i, bad);
-      }
-      for (const good of ["main", "origin/main", "feature/x-1", "v1.2.3", "HEAD"]) {
-        assert.equal(git.assertSafeRef(good), good);
-      }
+  // the default branch name comes from the remote. Refs are validated before
+  // they are handed to any process.
+  it("assertSafeRef rejects refs carrying shell metacharacters or looking like options", () => {
+    for (const bad of ["main|calc", "main&calc", "main;calc", "main$(x)", "main`x`", "a b", "--output=x", "", "  "]) {
+      assert.throws(() => assertSafeRef(bad), /unsafe|invalid/i, JSON.stringify(bad));
     }
-  );
+    for (const good of ["main", "origin/main", "feature/x-1", "v1.2.3", "HEAD"]) {
+      assert.equal(assertSafeRef(good), good);
+      assert.equal(assertSafeRef(good, tempDir), good);
+    }
+    // With a cwd, git's own rules apply too.
+    assert.throws(() => assertSafeRef("bad..ref", tempDir), /invalid ref/);
+  });
+
+  it("resolveReviewTarget refuses an unsafe --base", () => {
+    assert.throws(() => resolveReviewTarget(tempDir, { base: "main|calc" }), /unsafe ref/);
+  });
+
+  it("detectDefaultBranch refuses a remote HEAD whose name is unsafe", () => {
+    // execFileSync: the ref itself must not go through a shell in the test
+    // either. `&` rather than `|`: NTFS refuses `|` in a loose ref's filename
+    // (a clone would still deliver it through packed-refs), while `&` is a
+    // legal filename character and a cmd.exe command separator.
+    const gitArgs = (...args) => execFileSync("git", args, { cwd: tempDir, stdio: "ignore" });
+    gitArgs("update-ref", "refs/remotes/origin/main&calc", "HEAD");
+    gitArgs("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main&calc");
+    try {
+      assert.throws(() => detectDefaultBranch(tempDir), /unsafe ref/);
+    } finally {
+      gitArgs("symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+      gitArgs("update-ref", "-d", "refs/remotes/origin/main&calc");
+    }
+  });
 
   // Audit M5 / task P1-5. The diff is pasted whole into the prompt; only
   // untracked files have a size cap. A 1 MB change to a tracked file must be

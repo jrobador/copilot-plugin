@@ -27,12 +27,16 @@ jobs:
           cache: npm
 
       # `npm ci` enforces the lockfile; `npm install` would happily resolve a
-      # different tree. The Copilot SDK is an optional dependency and needs
+      # different tree. The Copilot runtime lives in plugins/copilot and needs
       # credentials to do anything, so the suite runs against the fake fixture
       # without it.
-      - run: npm ci --omit=optional
+      - run: npm ci
 
+      # tests/installed-copy.test.mjs really installs the runtime into a copy
+      # of the plugin, which downloads the CLI. Once per run is enough.
       - run: npm test
+        env:
+          COPILOT_TEST_OFFLINE: ${{ (matrix.os == 'ubuntu-latest' && matrix.node == '22') && '0' || '1' }}
 
   typecheck:
     runs-on: ubuntu-latest
@@ -44,7 +48,7 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - run: npm ci --omit=optional
+      - run: npm ci
 
       # JSDoc-typed JavaScript checked by tsc: catches fields that do not exist
       # (`result.error` on an object that never carries one) without a build step.

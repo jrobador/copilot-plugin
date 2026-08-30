@@ -69,34 +69,43 @@ describe("installed copy of the plugin", () => {
     assert.ok("copilot" in report);
   });
 
-  it(
-    "setup points at the SDK, not at the Copilot CLI package, when the runtime is missing",
-    { todo: "P0-2: one remediation message, about @github/copilot-sdk in the plugin directory" },
-    () => {
-      const result = companion(["setup", "--json"]);
-      const report = JSON.parse(result.stdout);
-      const text = JSON.stringify(report.nextSteps);
-      assert.doesNotMatch(text, /npm install -g @github\/copilot`/, "setup still suggests installing the CLI package instead of the SDK");
-      if (report.sdk?.available === false) {
-        assert.match(text, /install-runtime/);
-      }
-    }
-  );
+  it("setup reports the runtime as missing and points at --install-runtime", () => {
+    const result = companion(["setup", "--json"]);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.sdk.available, false, JSON.stringify(report.sdk));
+    assert.equal(report.ready, false);
+    const text = JSON.stringify(report.nextSteps);
+    assert.doesNotMatch(text, /npm install -g @github\/copilot`/, "setup still suggests installing the CLI package instead of the SDK");
+    assert.match(text, /install-runtime/);
+    assert.match(report.auth.detail, /install-runtime/);
+  });
+
+  it("the copy ships the manifest that --install-runtime installs from", () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(installed, "package.json"), "utf8"));
+    assert.ok(manifest.optionalDependencies["@github/copilot-sdk"]);
+    assert.ok(fs.existsSync(path.join(installed, "package-lock.json")), "the lockfile pins what gets installed");
+  });
 
   it(
     "setup --install-runtime makes the copy self-sufficient",
-    { todo: "P0-2: ship package.json with the plugin and let setup install the SDK into it", skip: process.env.COPILOT_TEST_OFFLINE === "1" },
+    { skip: process.env.COPILOT_TEST_OFFLINE === "1" ? "COPILOT_TEST_OFFLINE=1" : false },
     () => {
       const install = companion(["setup", "--install-runtime", "--json"]);
       assert.equal(install.status, 0, install.stderr);
       const report = JSON.parse(install.stdout);
-      assert.equal(report.sdk?.available, true, JSON.stringify(report.sdk ?? report.auth));
+      assert.equal(report.sdk.available, true, JSON.stringify(report.sdk));
+      assert.equal(report.sdk.source, "installed");
+      assert.ok(report.actionsTaken.some((action) => /Installed the Copilot runtime/.test(action)), JSON.stringify(report.actionsTaken));
       assert.ok(fs.existsSync(path.join(installed, "node_modules", "@github", "copilot-sdk", "package.json")));
+      assert.equal(report.copilot.available, true, "the SDK bundles the CLI");
 
       const again = companion(["setup", "--json"]);
       const second = JSON.parse(again.stdout);
-      assert.equal(second.sdk?.available, true);
-      assert.notEqual(second.auth.detail, "@github/copilot-sdk is not installed.");
+      assert.equal(second.sdk.available, true);
+      assert.doesNotMatch(second.auth.detail, /not installed/);
+
+      const idempotent = companion(["setup", "--install-runtime", "--json"]);
+      assert.ok(JSON.parse(idempotent.stdout).actionsTaken.some((action) => /already installed/.test(action)));
     }
   );
 });

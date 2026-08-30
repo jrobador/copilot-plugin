@@ -18,6 +18,17 @@ commands do; it changes what can go wrong while they do it.
 
 ### Fixed
 
+- **The plugin as installed from the marketplace could not run at all.** The
+  marketplace copies `plugins/copilot` and nothing else; `@github/copilot-sdk`
+  was declared in the repository's root `package.json`, which never ships, and
+  Node's resolution never reaches the repository from
+  `~/.claude/plugins/cache`. Every command failed with "not installed", and
+  `/copilot:setup` told the user to `npm install -g @github/copilot` -- a
+  different package, on a path the plugin does not search. The runtime is now
+  declared in `plugins/copilot/package.json` (with its lockfile), and
+  `/copilot:setup --install-runtime` installs it into the plugin directory;
+  `/copilot:setup` offers to do so whenever it is missing. One remediation
+  message, everywhere.
 - `--resume` never resumed anything. The job recorded the **Claude Code**
   session id under `sessionId`, and the resume path handed that to Copilot as
   if it were the Copilot session id, so every continuation failed and started

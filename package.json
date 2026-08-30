@@ -11,10 +11,8 @@
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "test:watch": "node --test --watch tests/*.test.mjs",
-    "typecheck": "tsc -p jsconfig.json"
-  },
-  "optionalDependencies": {
-    "@github/copilot-sdk": "^1.0.11"
+    "typecheck": "tsc -p jsconfig.json",
+    "deps": "cd plugins/copilot && npm ci"
   },
   "author": "Joaquin Robador <jrobador37@gmail.com>",
   "repository": {

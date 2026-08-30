@@ -28,8 +28,9 @@ your session.
 - **Node.js 20 or later.**
 
 You do **not** need a global Copilot CLI install: the plugin talks to Copilot
-through `@github/copilot-sdk`, which ships the CLI as a dependency. If you
-already have `copilot` on your PATH, that one is used instead.
+through `@github/copilot-sdk`, which ships the CLI as a dependency and which
+`/copilot:setup` installs into the plugin directory for you. If you already
+have `copilot` on your PATH, that one is used instead.
 
 ## Install
 
@@ -40,7 +41,12 @@ already have `copilot` on your PATH, that one is used instead.
 /copilot:setup
 ```
 
-`/copilot:setup` reports whether the runtime is available, whether you are
+On a fresh install `/copilot:setup` finds no runtime and offers to install it
+(`npm install` into the plugin's own directory, nothing global). Accept, or run
+`/copilot:setup --install-runtime` yourself. A plugin update can replace that
+directory; if it does, `/copilot:setup` offers again.
+
+`/copilot:setup` reports whether the runtime is installed, whether you are
 authenticated, and which models your account can use.
 
 If you are not signed in:
@@ -57,11 +63,6 @@ If you are not signed in:
 
 Being fixed in this release; until then:
 
-- **Fresh installs may not find the runtime.** The plugin as installed from
-  the marketplace does not ship `@github/copilot-sdk`. If `/copilot:setup`
-  says the SDK is not installed, run `npm install @github/copilot-sdk` in the
-  plugin directory (`~/.claude/plugins/cache/copilot-plugin-cc/copilot/<version>`)
-  and retry.
 - **The review gate blocks the session end on any failure**, including a
   logged-out Copilot. If it loops, run `/copilot:setup --disable-review-gate`.
 - **Rescue asks Copilot to edit by default.** Say "read-only" in the request
@@ -297,9 +298,15 @@ level. Only `/copilot:rescue` with write access can change files.
 ## Development
 
 ```bash
-npm install
+npm install        # test and typecheck tooling
+npm run deps       # the Copilot runtime, into plugins/copilot/node_modules
 npm test
+npm run typecheck
 ```
+
+The runtime lives in `plugins/copilot/package.json`, not the root one, because
+`plugins/copilot` is what the marketplace ships. The suite runs without it
+against `tests/fake-copilot-fixture.mjs` (`COPILOT_COMPANION_SDK_MODULE`).
 
 ## Credits
 

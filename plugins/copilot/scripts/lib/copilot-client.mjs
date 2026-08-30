@@ -12,6 +12,7 @@ import { pathToFileURL } from "node:url";
 
 import { binaryAvailable } from "./process.mjs";
 import { createWorkspacePolicy } from "./paths.mjs";
+import { ROOT_DIR } from "./plugin-root.mjs";
 import { createPermissionHandler, normalizeMode, READ_ONLY, WORKSPACE_WRITE } from "./permissions.mjs";
 import { createRunCommandTool, SHELL_TOOL_NAMES } from "./run-command.mjs";
 
@@ -55,6 +56,88 @@ function sdkOverride() {
   return override && override.trim() ? override.trim() : null;
 }
 
+export const SDK_PACKAGE = "@github/copilot-sdk";
+
+/** The one remediation for a missing runtime, used everywhere it is mentioned. */
+export const SDK_INSTALL_HINT = "Run `/copilot:setup --install-runtime` to install the Copilot runtime into the plugin directory.";
+
+/**
+ * How the runtime gets installed: into the plugin directory itself, next to
+ * the scripts that import it. The marketplace copies plugins/copilot and
+ * nothing else, so the repository's node_modules is never on the resolution
+ * path of an installed plugin; this is. Constant arguments only -- it is the
+ * one command that may go through cmd.exe (npm's .cmd shim).
+ *
+ * Run with cwd = ROOT_DIR, not `--prefix`: npm invoked from inside another
+ * package with `--prefix` adds that package as a `file:` dependency of the
+ * target, which is exactly the repository-to-plugin link this must not create.
+ */
+export function sdkInstallCommand() {
+  return { command: "npm", args: ["install", "--omit=dev", "--no-audit", "--no-fund"], cwd: ROOT_DIR };
+}
+
+/**
+ * Where the runtime is, or why it is not. `available` is what every caller
+ * needs; the rest is for `/copilot:setup` to print.
+ */
+export function getSdkStatus() {
+  const override = sdkOverride();
+  if (override) {
+    return {
+      available: true,
+      version: null,
+      installDir: null,
+      source: "override",
+      detail: `fake runtime (${SDK_MODULE_ENV}=${override})`,
+      installCommand: null
+    };
+  }
+  try {
+    const require = createRequire(import.meta.url);
+    const entry = require.resolve(SDK_PACKAGE);
+    // Walk up from the entry point to the package's own manifest; the package
+    // may not export ./package.json, so it cannot be required by name.
+    let dir = path.dirname(entry);
+    for (;;) {
+      const manifestPath = path.join(dir, "package.json");
+      if (fsExists(manifestPath)) {
+        const manifest = require(manifestPath);
+        if (manifest.name === SDK_PACKAGE) {
+          return {
+            available: true,
+            version: manifest.version ?? null,
+            installDir: dir,
+            source: "installed",
+            detail: `${SDK_PACKAGE} ${manifest.version ?? "?"} in ${dir}`,
+            installCommand: null
+          };
+        }
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    return { available: true, version: null, installDir: null, source: "installed", detail: `${SDK_PACKAGE} resolved from ${entry}`, installCommand: null };
+  } catch (error) {
+    return {
+      available: false,
+      version: null,
+      installDir: null,
+      source: null,
+      detail: `not installed (${error.message.split("\n")[0]})`,
+      installCommand: sdkInstallCommand()
+    };
+  }
+}
+
+function fsExists(file) {
+  try {
+    return createRequire(import.meta.url)("node:fs").existsSync(file);
+  } catch {
+    return false;
+  }
+}
+
 async function loadSdk() {
   const override = sdkOverride();
   if (override) {
@@ -67,11 +150,11 @@ async function loadSdk() {
     }
   }
   try {
-    return await import("@github/copilot-sdk");
+    return await import(SDK_PACKAGE);
   } catch (error) {
-    const hint =
-      "The @github/copilot-sdk package is not installed. Run `/copilot:setup`, or install it with `npm install @github/copilot-sdk`.";
-    throw Object.assign(new Error(`${hint} (${error.message})`), { code: "SDK_MISSING" });
+    throw Object.assign(new Error(`The Copilot runtime (${SDK_PACKAGE}) is not installed. ${SDK_INSTALL_HINT} (${error.message})`), {
+      code: "SDK_MISSING"
+    });
   }
 }
 
@@ -455,7 +538,7 @@ export async function getCopilotLoginStatus(cwd = process.cwd()) {
       loggedIn: false,
       detail:
         error.code === "SDK_MISSING"
-          ? "@github/copilot-sdk is not installed."
+          ? `${SDK_PACKAGE} is not installed. ${SDK_INSTALL_HINT}`
           : `Could not start the Copilot runtime: ${error.message}`,
       authType: null,
       login: null,

@@ -80,6 +80,7 @@ describe("copilot-companion CLI", () => {
     assert.equal(result.status, 0, result.stderr);
     const report = JSON.parse(result.stdout);
     assert.equal(report.ready, true);
+    assert.equal(report.sdk.source, "override");
     assert.equal(report.copilot.source, "override");
     assert.equal(report.auth.loggedIn, true);
     assert.ok(report.models.includes("gpt-5.4"));

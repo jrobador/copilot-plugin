@@ -113,9 +113,7 @@ export function buildReviewPrompt(templateName, { reviewName, context, focusText
 export async function ensureCopilotReady(cwd) {
   const authStatus = await getCopilotLoginStatus(cwd);
   if (!authStatus.available) {
-    throw new Error(
-      "The Copilot runtime is unavailable. Install it with `npm install -g @github/copilot`, then rerun `/copilot:setup`."
-    );
+    throw new Error(`The Copilot runtime is unavailable: ${authStatus.detail}`);
   }
   if (!authStatus.loggedIn) {
     throw new Error(

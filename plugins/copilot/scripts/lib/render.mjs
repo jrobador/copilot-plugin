@@ -188,6 +188,7 @@ export function renderSetupReport(report) {
     "Checks:",
     `- node: ${report.node.detail}`,
     `- npm: ${report.npm.detail}`,
+    `- runtime: ${report.sdk?.detail ?? "unknown"}`,
     `- copilot: ${report.copilot.detail}`,
     `- auth: ${report.auth.detail}`,
     `- session runtime: ${report.sessionRuntime.label}`,

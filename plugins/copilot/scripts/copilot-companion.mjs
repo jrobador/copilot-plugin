@@ -10,13 +10,15 @@ import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
   getCopilotAvailability,
   getCopilotLoginStatus,
+  getSdkStatus,
   getSessionRuntimeStatus,
   listModels,
+  SDK_INSTALL_HINT,
   shutdownClient
 } from "./lib/copilot-client.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { resolveReviewTarget } from "./lib/git.mjs";
-import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
+import { binaryAvailable, runCommandChecked, terminateProcessTree } from "./lib/process.mjs";
 import { ROOT_DIR } from "./lib/plugin-root.mjs";
 import {
   assertWriteRootAcceptable,
@@ -73,7 +75,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/copilot-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--allow-programs a,b,c|--clear-allowed-programs] [--json]",
+      "  node scripts/copilot-companion.mjs setup [--install-runtime] [--enable-review-gate|--disable-review-gate] [--allow-programs a,b,c|--clear-allowed-programs] [--json]",
       "  node scripts/copilot-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>]",
       "  node scripts/copilot-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>] [focus text]",
       "  node scripts/copilot-companion.mjs task [--background] [--write] [--unsafe-shell] [--allow-wide-root] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <low|medium|high|xhigh|max>] [prompt]",
@@ -135,16 +137,30 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
+  const sdkStatus = getSdkStatus();
   const copilotStatus = getCopilotAvailability(cwd);
-  const authStatus = await getCopilotLoginStatus(cwd);
+  const authStatus = sdkStatus.available
+    ? await getCopilotLoginStatus(cwd)
+    : {
+        available: false,
+        loggedIn: false,
+        detail: `${sdkStatus.detail}. ${SDK_INSTALL_HINT}`,
+        authType: null,
+        login: null,
+        host: null
+      };
   const config = getConfig(workspaceRoot);
   const models = authStatus.loggedIn ? await listModels(cwd) : [];
 
   const nextSteps = [];
-  if (!copilotStatus.available) {
-    nextSteps.push("Install the Copilot CLI with `npm install -g @github/copilot`.");
+  if (!sdkStatus.available) {
+    // The one remediation. The SDK bundles the CLI, so there is nothing else
+    // to install; pointing at a global CLI package here sent users the wrong way.
+    nextSteps.push(SDK_INSTALL_HINT);
+  } else if (!copilotStatus.available) {
+    nextSteps.push("The runtime is installed but its CLI could not be found; reinstall with `/copilot:setup --install-runtime`.");
   }
-  if (copilotStatus.available && !authStatus.loggedIn) {
+  if (sdkStatus.available && copilotStatus.available && !authStatus.loggedIn) {
     nextSteps.push("Run `!copilot login`.");
     nextSteps.push(
       "If browser login is blocked, retry with `!copilot login --device-code` or `!copilot login --with-token`."
@@ -155,9 +171,10 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   }
 
   return {
-    ready: nodeStatus.available && copilotStatus.available && authStatus.loggedIn,
+    ready: nodeStatus.available && sdkStatus.available && copilotStatus.available && authStatus.loggedIn,
     node: nodeStatus,
     npm: npmStatus,
+    sdk: sdkStatus,
     copilot: copilotStatus,
     auth: authStatus,
     sessionRuntime: getSessionRuntimeStatus(),
@@ -186,7 +203,7 @@ function parseAllowedPrograms(raw) {
 async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd", "allow-programs"],
-    booleanOptions: ["json", "enable-review-gate", "disable-review-gate", "clear-allowed-programs"]
+    booleanOptions: ["json", "enable-review-gate", "disable-review-gate", "clear-allowed-programs", "install-runtime"]
   });
 
   if (options["enable-review-gate"] && options["disable-review-gate"]) {
@@ -199,6 +216,24 @@ async function handleSetup(argv) {
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const actionsTaken = [];
+
+  if (options["install-runtime"]) {
+    const sdk = getSdkStatus();
+    if (sdk.available) {
+      actionsTaken.push(`The Copilot runtime is already installed (${sdk.detail}).`);
+    } else {
+      const { command, args, cwd: installDir } = sdk.installCommand;
+      // npm's .cmd shim is the one thing allowed through cmd.exe; every
+      // argument here is a constant, and the target is the plugin's own
+      // directory via cwd.
+      runCommandChecked(command, args, { cwd: installDir });
+      const after = getSdkStatus();
+      if (!after.available) {
+        throw new Error(`npm finished but the runtime still does not resolve: ${after.detail}`);
+      }
+      actionsTaken.push(`Installed the Copilot runtime: ${after.detail}.`);
+    }
+  }
 
   if (options["enable-review-gate"]) {
     setConfig(workspaceRoot, "stopReviewGate", true);

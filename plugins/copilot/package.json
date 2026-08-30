@@ -1,6 +1,6 @@
 {
   "name": "copilot-plugin-cc-runtime",
-  "version": "0.1.1-dev",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Runtime dependencies of the Copilot plugin for Claude Code. Installed into the plugin directory by `/copilot:setup --install-runtime`.",

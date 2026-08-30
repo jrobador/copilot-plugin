@@ -145,6 +145,9 @@ function pushJobDetails(lines, job, options = {}) {
   if (job.logFile && options.showLog) {
     lines.push(`  Log: ${job.logFile}`);
   }
+  if (job.stale) {
+    lines.push(`  Worker gone: the process behind this job no longer exists. Close it with /copilot:cancel ${job.id}.`);
+  }
   if (job.status === "awaiting-approval") {
     lines.push(`  Wants to: ${job.pendingApproval?.request ?? "a request"}`);
     lines.push(`  Approve: /copilot:approve ${job.id}`);
@@ -426,9 +429,13 @@ export function renderStatusReport(report) {
     lines.push("No jobs recorded yet.", "");
   }
 
+  if (report.otherSessions > 0) {
+    lines.push(`Including ${report.otherSessions} job(s) from other Claude sessions (--all).`, "");
+  }
+
   if (report.needsReview) {
     lines.push("The stop-time review gate is enabled.");
-    lines.push("Ending the session will trigger a fresh Copilot adversarial review and block if it finds issues.");
+    lines.push("Ending the session runs a Copilot review of the turn and blocks only on an explicit finding.");
   }
 
   return `${lines.join("\n").trimEnd()}\n`;

@@ -150,6 +150,56 @@ export function binaryAvailable(command, versionArgs = ["--version"], options = 
   return { available: true, detail: result.stdout.trim() || result.stderr.trim() || "ok" };
 }
 
+/** Is a process with this pid alive? Signal 0 probes without sending anything. */
+export function isProcessAlive(pid, killImpl = process.kill.bind(process)) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    killImpl(Math.floor(pid), 0);
+    return true;
+  } catch (error) {
+    // EPERM: it exists but belongs to someone else. Alive, and not ours.
+    return /** @type {NodeJS.ErrnoException} */ (error)?.code === "EPERM";
+  }
+}
+
+/**
+ * The command line of a process, or null when it cannot be read. A stored pid
+ * outlives the worker it belonged to and can be reused by anything; this is
+ * how a kill checks it is still aiming at one of our workers.
+ */
+export function processCommandLine(pid, options = {}) {
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  const id = Math.floor(pid);
+  const platform = options.platform ?? process.platform;
+  const run = options.runCommandImpl ?? runCommand;
+
+  if (platform === "win32") {
+    // PowerShell without a shell in between; the only interpolated value is a
+    // number.
+    const result = run("powershell", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-CimInstance Win32_Process -Filter "ProcessId = ${id}").CommandLine`
+    ]);
+    const text = result.error || result.status !== 0 ? "" : result.stdout.trim();
+    return text || null;
+  }
+
+  if (platform === "linux") {
+    try {
+      const raw = fs.readFileSync(`/proc/${id}/cmdline`, "utf8");
+      return raw.split("\0").filter(Boolean).join(" ") || null;
+    } catch {
+      return null;
+    }
+  }
+
+  const result = run("ps", ["-o", "args=", "-p", String(id)]);
+  const text = result.error || result.status !== 0 ? "" : result.stdout.trim();
+  return text || null;
+}
+
 /** taskkill's exit code when the target pid does not exist. */
 const TASKKILL_PROCESS_NOT_FOUND = 128;
 
@@ -162,14 +212,44 @@ function looksLikeMissingProcessMessage(text) {
   return /not found|no running instance|cannot find|does not exist|no such process/i.test(text);
 }
 
+/**
+ * Kill a process and its children.
+ *
+ * With `options.identity`, the target's command line is read first and the
+ * kill only proceeds when the predicate accepts it; a pid whose command line
+ * cannot be read or does not match is left alone and reported as such. Pids
+ * come from job records that may be hours old, and Windows reuses them.
+ *
+ * @param {number} pid
+ * @param {{
+ *   identity?: (commandLine: string) => boolean,
+ *   commandLineImpl?: (pid: number) => string|null,
+ *   platform?: string,
+ *   runCommandImpl?: typeof runCommand,
+ *   killImpl?: typeof process.kill,
+ *   cwd?: string,
+ *   env?: NodeJS.ProcessEnv
+ * }} [options]
+ */
 export function terminateProcessTree(pid, options = {}) {
   if (!Number.isFinite(pid)) {
-    return { attempted: false, delivered: false, method: null };
+    return { attempted: false, delivered: false, method: null, reason: "no pid" };
   }
 
   const platform = options.platform ?? process.platform;
   const runCommandImpl = options.runCommandImpl ?? runCommand;
   const killImpl = options.killImpl ?? process.kill.bind(process);
+
+  if (typeof options.identity === "function") {
+    const commandLineImpl = options.commandLineImpl ?? ((target) => processCommandLine(target, { platform, runCommandImpl }));
+    const commandLine = commandLineImpl(pid);
+    if (commandLine == null) {
+      return { attempted: false, delivered: false, method: null, reason: "process not found or its command line is unreadable" };
+    }
+    if (!options.identity(commandLine)) {
+      return { attempted: false, delivered: false, method: null, reason: `pid ${pid} now belongs to another process` };
+    }
+  }
 
   if (platform === "win32") {
     const result = runCommandImpl("taskkill", ["/PID", String(pid), "/T", "/F"], {
@@ -190,12 +270,12 @@ export function terminateProcessTree(pid, options = {}) {
       return { attempted: true, delivered: false, method: "taskkill", result };
     }
 
-    if (result.error?.code === "ENOENT") {
+    if (/** @type {NodeJS.ErrnoException|undefined} */ (result.error)?.code === "ENOENT") {
       try {
         killImpl(pid);
         return { attempted: true, delivered: true, method: "kill" };
       } catch (error) {
-        if (error?.code === "ESRCH") {
+        if (/** @type {NodeJS.ErrnoException} */ (error)?.code === "ESRCH") {
           return { attempted: true, delivered: false, method: "kill" };
         }
         throw error;

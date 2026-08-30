@@ -1,6 +1,6 @@
 {
   "name": "copilot-plugin-cc",
-  "version": "0.1.1-dev",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Delegate code review and coding tasks from Claude Code to GitHub Copilot.",

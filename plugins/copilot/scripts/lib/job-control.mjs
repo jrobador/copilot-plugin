@@ -1,6 +1,8 @@
 import fs from "node:fs";
 
-import { AWAITING_APPROVAL, getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { getSessionRuntimeStatus } from "./copilot-client.mjs";
+import { isProcessAlive } from "./process.mjs";
+import { AWAITING_APPROVAL, getConfig, isTerminalStatus, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
 import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
@@ -13,16 +15,36 @@ function isAwaitingApproval(job) {
   return job.status === AWAITING_APPROVAL;
 }
 
-function getSessionRuntimeStatus(env = process.env) {
-  return {
-    mode: "sdk",
-    label: "SDK managed",
-    detail: "Copilot CLI process managed by @github/copilot-sdk."
-  };
-}
-
 export const DEFAULT_MAX_STATUS_JOBS = 8;
 export const DEFAULT_MAX_PROGRESS_LINES = 4;
+
+/**
+ * A queued job whose worker never recorded a pid is given this long before it
+ * counts as stale; the spawn itself takes well under a second.
+ */
+export const STALE_QUEUED_AFTER_MS = 5 * 60 * 1000;
+
+/**
+ * An active job whose worker is gone. Workers die without updating their
+ * record when they are killed, run out of memory, or the machine reboots;
+ * nothing else ever moves such a job on.
+ *
+ * @param {object} job
+ * @param {{isAlive?: (pid: number) => boolean, now?: number}} [options]
+ */
+export function isStaleJob(job, options = {}) {
+  if (!isActive(job)) return false;
+  const isAlive = options.isAlive ?? isProcessAlive;
+  if (Number.isFinite(job.pid) && job.pid > 0) {
+    return !isAlive(job.pid);
+  }
+  if (job.status === "queued") {
+    const since = Date.parse(job.updatedAt ?? job.createdAt ?? "");
+    const now = options.now ?? Date.now();
+    return Number.isFinite(since) && now - since > STALE_QUEUED_AFTER_MS;
+  }
+  return false;
+}
 
 export function sortJobsNewestFirst(jobs) {
   return [...jobs].sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")));
@@ -178,23 +200,25 @@ function inferLegacyJobPhase(job, progressPreview = []) {
 
 export function enrichJob(job, options = {}) {
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
+  const stale = isStaleJob(job, { isAlive: options.isAlive, now: options.now });
   const enriched = {
     ...job,
     kindLabel: getJobTypeLabel(job),
+    stale,
     progressPreview:
       job.status === "queued" || job.status === "running" || job.status === "failed"
         ? readJobProgressPreview(job.logFile, maxProgressLines)
         : [],
     elapsed: formatElapsedDuration(job.startedAt ?? job.createdAt, job.completedAt ?? null),
-    duration:
-      job.status === "completed" || job.status === "failed" || job.status === "cancelled"
-        ? formatElapsedDuration(job.startedAt ?? job.createdAt, job.completedAt ?? job.updatedAt)
-        : null
+    duration: isTerminalStatus(job.status)
+      ? formatElapsedDuration(job.startedAt ?? job.createdAt, job.completedAt ?? job.updatedAt)
+      : null
   };
 
   return {
     ...enriched,
-    phase: enriched.phase ?? inferLegacyJobPhase(enriched, enriched.progressPreview)
+    // A stale job's stored phase describes a worker that no longer exists.
+    phase: stale ? "stale" : (enriched.phase ?? inferLegacyJobPhase(enriched, enriched.progressPreview))
   };
 }
 
@@ -231,7 +255,11 @@ function matchJobReference(jobs, reference, predicate = () => true) {
 export function buildStatusSnapshot(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
-  const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), options));
+  const allJobs = listJobs(workspaceRoot);
+  const sessionJobs = filterJobsForCurrentSession(allJobs, options);
+  // --all shows every session's jobs for this workspace, not just this one's.
+  const jobs = sortJobsNewestFirst(options.all ? allJobs : sessionJobs);
+  const otherSessions = options.all ? allJobs.length - sessionJobs.length : 0;
   const maxJobs = options.maxJobs ?? DEFAULT_MAX_STATUS_JOBS;
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
 
@@ -252,11 +280,12 @@ export function buildStatusSnapshot(cwd, options = {}) {
   return {
     workspaceRoot,
     config,
-    sessionRuntime: getSessionRuntimeStatus(options.env),
+    sessionRuntime: getSessionRuntimeStatus(),
     running,
     awaitingApproval,
     latestFinished,
     recent,
+    otherSessions,
     needsReview: Boolean(config.stopReviewGate)
   };
 }
@@ -275,29 +304,37 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
   };
 }
 
+function explainUnfinished(job) {
+  if (isAwaitingApproval(job)) {
+    return new Error(
+      `Job ${job.id} is paused waiting for your approval to ${job.pendingApproval?.request ?? "a request"}. Run /copilot:approve ${job.id} to allow it or /copilot:deny ${job.id} to refuse.`
+    );
+  }
+  return new Error(`Job ${job.id} is still ${job.status}. Check /copilot:status and try again once it finishes.`);
+}
+
 export function resolveResultJob(cwd, reference) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(reference ? listJobs(workspaceRoot) : filterJobsForCurrentSession(listJobs(workspaceRoot)));
-  const selected = matchJobReference(
-    jobs,
-    reference,
-    (job) => job.status === "completed" || job.status === "failed" || job.status === "cancelled"
-  );
 
+  if (reference) {
+    // Find the job first, then judge its state: a running job asked for by id
+    // used to be reported as "no job found".
+    const job = matchJobReference(jobs, reference);
+    if (isTerminalStatus(job.status)) {
+      return { workspaceRoot, job };
+    }
+    throw explainUnfinished(job);
+  }
+
+  const selected = matchJobReference(jobs, reference, (job) => isTerminalStatus(job.status));
   if (selected) {
     return { workspaceRoot, job: selected };
   }
 
-  const awaiting = matchJobReference(jobs, reference, isAwaitingApproval);
-  if (awaiting) {
-    throw new Error(
-      `Job ${awaiting.id} is paused waiting for your approval to ${awaiting.pendingApproval?.request ?? "a request"}. Run /copilot:approve ${awaiting.id} to allow it or /copilot:deny ${awaiting.id} to refuse.`
-    );
-  }
-
-  const active = matchJobReference(jobs, reference, isActive);
-  if (active) {
-    throw new Error(`Job ${active.id} is still ${active.status}. Check /copilot:status and try again once it finishes.`);
+  const unfinished = matchJobReference(jobs, reference, (job) => isAwaitingApproval(job) || isActive(job));
+  if (unfinished) {
+    throw explainUnfinished(unfinished);
   }
 
   if (reference) {

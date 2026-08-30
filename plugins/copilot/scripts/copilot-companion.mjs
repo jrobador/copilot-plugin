@@ -18,11 +18,12 @@ import {
 } from "./lib/copilot-client.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { resolveReviewTarget } from "./lib/git.mjs";
-import { binaryAvailable, runCommandChecked, terminateProcessTree } from "./lib/process.mjs";
+import { binaryAvailable, runCommandChecked } from "./lib/process.mjs";
 import { ROOT_DIR } from "./lib/plugin-root.mjs";
 import {
   assertWriteRootAcceptable,
   buildTaskRunMetadata,
+  COPILOT_AUTH,
   copilotSessionIdOf,
   ensureCopilotReady,
   executeApprovalResume,
@@ -57,7 +58,8 @@ import {
   createProgressReporter,
   nowIso,
   runTrackedJob,
-  SESSION_ID_ENV
+  SESSION_ID_ENV,
+  terminateWorker
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 import {
@@ -860,8 +862,15 @@ export async function handleCancel(argv) {
   const { workspaceRoot, job } = resolveCancelableJob(cwd, reference);
   const existing = readStoredJob(workspaceRoot, job.id) ?? {};
 
-  terminateProcessTree(job.pid ?? Number.NaN);
-  appendLogLine(job.logFile, "Cancelled by user.");
+  // A paused job has no worker; an active one is killed only if its pid still
+  // belongs to a companion process.
+  const kill = job.pid ? terminateWorker(job.pid) : { attempted: false, delivered: false, reason: "no worker" };
+  const killNote = kill.delivered
+    ? `worker ${job.pid} terminated`
+    : kill.attempted
+      ? `worker ${job.pid} was already gone`
+      : `worker not killed: ${kill.reason ?? "no worker"}`;
+  appendLogLine(job.logFile, `Cancelled by user (${killNote}).`);
 
   const completedAt = nowIso();
   const nextJob = {
@@ -960,12 +969,10 @@ if (isEntrypoint) {
     })
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      const isAuthError =
-        /auth|login|unauthenticated|unauthorized|not signed in|credentials/i.test(message);
-      if (isAuthError) {
-        process.stderr.write(
-          "Copilot authentication failed. Run `!copilot login` to authenticate and retry.\n"
-        );
+      // Classified by code, set where the failure is known. Matching the text
+      // turned "Unknown subcommand: authors" into an authentication failure.
+      if (error?.code === COPILOT_AUTH) {
+        process.stderr.write(`Copilot authentication failed: ${message}\nRun \`!copilot login\` to authenticate and retry.\n`);
       } else {
         process.stderr.write(`${message}\n`);
       }

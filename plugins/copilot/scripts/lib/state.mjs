@@ -7,7 +7,12 @@ import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
-const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "copilot-companion");
+/**
+ * Where job records go when Claude Code did not hand us CLAUDE_PLUGIN_DATA.
+ * Under the home directory, not the shared temp dir: the records hold prompts,
+ * diffs and model output.
+ */
+const FALLBACK_STATE_ROOT_DIR = path.join(os.homedir(), ".copilot-companion");
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
@@ -79,7 +84,9 @@ export function resolveJobsDir(cwd) {
 }
 
 export function ensureStateDir(cwd) {
-  fs.mkdirSync(resolveJobsDir(cwd), { recursive: true });
+  // Owner-only on POSIX (ignored on Windows): the records hold repository
+  // content and model output.
+  fs.mkdirSync(resolveJobsDir(cwd), { recursive: true, mode: 0o700 });
 }
 
 /** Fields that live in the job file only; the index never carries them. */

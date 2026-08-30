@@ -5,6 +5,8 @@ import {
   runCommand,
   runCommandChecked,
   binaryAvailable,
+  isProcessAlive,
+  processCommandLine,
   resolveBinary,
   terminateProcessTree,
   formatCommandFailure
@@ -139,6 +141,48 @@ describe("terminateProcessTree", () => {
     const result = terminateProcessTree(999999999);
     assert.equal(result.attempted, true);
     assert.equal(result.delivered, false);
+  });
+
+  // Audit M2 / task P1-2. A stored pid can be reused by anything; with an
+  // identity predicate the kill only proceeds when the command line matches.
+  it("with an identity predicate, leaves a pid that belongs to something else alone", () => {
+    const calls = [];
+    const runCommandImpl = (command, args) => {
+      calls.push([command, ...args]);
+      return { command, args, status: 0, stdout: "", stderr: "", error: null };
+    };
+    const killImpl = () => {
+      calls.push(["kill"]);
+    };
+    const common = { runCommandImpl, killImpl, identity: (line) => line.includes("copilot-companion.mjs") };
+
+    const foreign = terminateProcessTree(4242, { ...common, commandLineImpl: () => "C:\\Windows\\explorer.exe" });
+    assert.equal(foreign.attempted, false);
+    assert.match(foreign.reason, /another process/);
+
+    const unknown = terminateProcessTree(4242, { ...common, commandLineImpl: () => null });
+    assert.equal(unknown.attempted, false);
+    assert.match(unknown.reason, /not found|unreadable/);
+    assert.deepEqual(calls, [], "nothing was killed");
+
+    const ours = terminateProcessTree(4242, { ...common, commandLineImpl: () => "node copilot-companion.mjs task-worker --job-id x", platform: "win32" });
+    assert.equal(ours.attempted, true);
+    assert.equal(ours.delivered, true);
+    assert.deepEqual(calls[0].slice(0, 3), ["taskkill", "/PID", "4242"]);
+  });
+});
+
+describe("isProcessAlive / processCommandLine", () => {
+  it("sees this process and not a bogus pid", () => {
+    assert.equal(isProcessAlive(process.pid), true);
+    assert.equal(isProcessAlive(999999999), false);
+    assert.equal(isProcessAlive(Number.NaN), false);
+  });
+
+  it("reads this process's own command line", () => {
+    const line = processCommandLine(process.pid);
+    assert.ok(line, "command line could not be read on this platform");
+    assert.match(line, /node/i);
   });
 });
 

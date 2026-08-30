@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
-import { terminateProcessTree } from "./lib/process.mjs";
 import { loadState, resolveStateFile, saveState } from "./lib/state.mjs";
+import { terminateWorker } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 export const SESSION_ID_ENV = "COPILOT_COMPANION_SESSION_ID";
@@ -29,30 +31,53 @@ function appendEnvVar(name, value) {
   fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
 }
 
-function cleanupSessionJobs(cwd, sessionId) {
-  if (!cwd || !sessionId) return;
+/**
+ * The Claude session is ending: stop the workers it started, and close their
+ * records. Finished jobs and jobs paused for approval are kept -- a result
+ * should survive a restart, and a paused job still has its revive context.
+ *
+ * @param {string} cwd
+ * @param {string} sessionId  The Claude Code session id.
+ * @param {{terminate?: typeof terminateWorker}} [seams]
+ */
+export function cleanupSessionJobs(cwd, sessionId, seams = {}) {
+  if (!cwd || !sessionId) return { stopped: [] };
+  const terminate = seams.terminate ?? terminateWorker;
+  const stopped = [];
   try {
     const workspaceRoot = resolveWorkspaceRoot(cwd);
     const stateFile = resolveStateFile(workspaceRoot);
-    if (!fs.existsSync(stateFile)) return;
+    if (!fs.existsSync(stateFile)) return { stopped };
 
     const state = loadState(workspaceRoot);
-    const sessionJobs = state.jobs.filter((job) => job.sessionId === sessionId);
-    if (sessionJobs.length === 0) return;
-
-    for (const job of sessionJobs) {
-      if (job.status === "queued" || job.status === "running") {
-        try { terminateProcessTree(job.pid ?? Number.NaN); } catch {}
+    const completedAt = new Date().toISOString();
+    const jobs = state.jobs.map((job) => {
+      if (job.sessionId !== sessionId || !(job.status === "queued" || job.status === "running")) {
+        return job;
       }
-    }
-
-    saveState(workspaceRoot, {
-      ...state,
-      jobs: state.jobs.filter((job) => job.sessionId !== sessionId)
+      try {
+        terminate(job.pid);
+      } catch {
+        // Best effort.
+      }
+      stopped.push(job.id);
+      return {
+        ...job,
+        status: "cancelled",
+        phase: "cancelled",
+        pid: null,
+        completedAt,
+        errorMessage: "Cancelled: the Claude session that started it ended."
+      };
     });
+
+    if (stopped.length > 0) {
+      saveState(workspaceRoot, { ...state, jobs });
+    }
   } catch {
     // Best-effort cleanup
   }
+  return { stopped };
 }
 
 function handleSessionStart(input) {
@@ -78,7 +103,12 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-});
+// Only run as a hook when executed directly; tests import cleanupSessionJobs.
+const isEntrypoint =
+  Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isEntrypoint) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}

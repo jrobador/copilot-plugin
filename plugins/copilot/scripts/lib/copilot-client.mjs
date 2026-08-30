@@ -11,8 +11,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { binaryAvailable } from "./process.mjs";
-import { createWorkspacePolicy } from "./paths.mjs";
+import { canonicalizePath, createWorkspacePolicy } from "./paths.mjs";
 import { ROOT_DIR } from "./plugin-root.mjs";
+import { resolveWorkspaceRoot } from "./workspace.mjs";
 import { createPermissionHandler, normalizeMode, READ_ONLY, WORKSPACE_WRITE } from "./permissions.mjs";
 import { createRunCommandTool, SHELL_TOOL_NAMES } from "./run-command.mjs";
 
@@ -158,22 +159,33 @@ async function loadSdk() {
   }
 }
 
+/**
+ * One client per workspace, whatever directory inside it the caller passes.
+ * The git top level in its canonical spelling, so `repo`, `repo/src` and
+ * git's own forward-slash form of the root all share one CLI process instead
+ * of starting one each.
+ */
+export function clientKey(cwd = process.cwd()) {
+  return canonicalizePath(path.resolve(resolveWorkspaceRoot(cwd)));
+}
+
 export async function ensureClient(cwd = process.cwd(), options = {}) {
-  const existing = clients.get(cwd);
+  const key = clientKey(cwd);
+  const existing = clients.get(key);
   if (existing) return existing;
 
   const { CopilotClient } = await loadSdk();
   const client = new CopilotClient({
-    workingDirectory: cwd,
+    workingDirectory: key,
     logLevel: options.logLevel ?? "error"
   });
   await client.start();
-  clients.set(cwd, client);
+  clients.set(key, client);
   return client;
 }
 
 export async function shutdownClient(cwd) {
-  const keys = cwd ? [cwd] : [...clients.keys()];
+  const keys = cwd ? [clientKey(cwd)] : [...clients.keys()];
   for (const key of keys) {
     const client = clients.get(key);
     if (!client) continue;
@@ -211,8 +223,8 @@ export function buildSessionConfig(options, permissionMode, sink) {
       escalateReads: options.escalateReads,
       approvedReads: options.approvedReads
     }),
-    // Touched files are reported back to the user, so track them.
-    enableFileChangeTracking: permissionMode === WORKSPACE_WRITE,
+    // Touched files come from the permission handler above; the SDK's own
+    // file-change tracking (session rewind, cumulative diff) is not consumed.
     // The runtime's shell tools hand the model an interpreter we cannot
     // fence. run_command spawns one program with an argument list instead,
     // and reports through the same observer as the permission handler.

@@ -147,6 +147,13 @@ describe("state", () => {
     );
   });
 
+  // Audit L6 / task P2-6. The records hold prompts, diffs and model output.
+  it("creates the state directory owner-only on POSIX", { skip: process.platform === "win32" }, () => {
+    upsertJob(tempDir, { id: "perm-1", status: "completed" });
+    const mode = fs.statSync(resolveStateDir(tempDir)).mode & 0o777;
+    assert.equal(mode, 0o700);
+  });
+
   it("writes state.json atomically (no temp file left behind, content complete)", () => {
     upsertJob(tempDir, { id: "atomic-1", status: "completed" });
     const dir = resolveStateDir(tempDir);

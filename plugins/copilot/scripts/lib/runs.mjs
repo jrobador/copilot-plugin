@@ -110,14 +110,19 @@ export function buildReviewPrompt(templateName, { reviewName, context, focusText
   });
 }
 
+/** error.code values the CLI's top-level handler acts on. */
+export const COPILOT_RUNTIME_MISSING = "COPILOT_RUNTIME_MISSING";
+export const COPILOT_AUTH = "COPILOT_AUTH";
+
 export async function ensureCopilotReady(cwd) {
   const authStatus = await getCopilotLoginStatus(cwd);
   if (!authStatus.available) {
-    throw new Error(`The Copilot runtime is unavailable: ${authStatus.detail}`);
+    throw Object.assign(new Error(`The Copilot runtime is unavailable: ${authStatus.detail}`), { code: COPILOT_RUNTIME_MISSING });
   }
   if (!authStatus.loggedIn) {
-    throw new Error(
-      `Copilot is not authenticated (${authStatus.detail}). Run \`!copilot login\`, then rerun \`/copilot:setup\`.`
+    throw Object.assign(
+      new Error(`Copilot is not authenticated (${authStatus.detail}). Run \`!copilot login\`, then rerun \`/copilot:setup\`.`),
+      { code: COPILOT_AUTH }
     );
   }
   return authStatus;
@@ -193,7 +198,6 @@ export async function executeReviewRun(request) {
   // Both reviews are structured. Upstream left the plain review as a one-line
   // prompt with no schema, which made its output impossible to render or sort
   // by severity the way the review commands promise.
-  const isStructured = true;
   const prompt = buildReviewPrompt(isAdversarial ? "adversarial-review" : "review", {
     reviewName,
     context,
@@ -222,61 +226,29 @@ export async function executeReviewRun(request) {
   });
   const rawOutput = result.content ?? "";
 
-  if (isStructured) {
-    const parsed = parseStructuredOutput(rawOutput, {
-      failureMessage: result.error?.message ?? ""
-    });
-    const payload = {
-      review: reviewName,
-      target,
-      sessionId: result.sessionId,
-      context: {
-        repoRoot: context.repoRoot,
-        branch: context.branch,
-        summary: context.summary
-      },
-      copilot: {
-        status: rawOutput ? 0 : 1,
-        stdout: rawOutput,
-        reasoning: result.reasoning
-      },
-      result: parsed.parsed,
-      rawOutput: parsed.rawOutput,
-      parseError: parsed.parseError,
-      reasoningSummary: result.reasoning ? [result.reasoning] : [],
-      // A review is read-only, so touchedFiles should stay empty; recording
-      // both makes a violation visible instead of silently absorbed.
-      touchedFiles: result.touchedFiles ?? [],
-      denials: result.denials ?? []
-    };
-    return {
-      exitStatus: rawOutput ? 0 : 1,
-      sessionId: result.sessionId,
-      copilotSessionId: result.sessionId ?? null,
-      threadId: result.sessionId ?? null,
-      payload,
-      rendered: renderReviewResult(parsed, {
-        reviewLabel: reviewName,
-        targetLabel: context.target.label,
-        reasoningSummary: result.reasoning ? [result.reasoning] : []
-      }),
-      summary: parsed.parsed?.summary ?? parsed.parseError ?? firstMeaningfulLine(rawOutput, `${reviewName} finished.`),
-      jobTitle: `Copilot ${reviewName}`,
-      jobClass: "review",
-      targetLabel: context.target.label
-    };
-  }
-
-  // Plain review result
+  const parsed = parseStructuredOutput(rawOutput);
   const payload = {
     review: reviewName,
     target,
     sessionId: result.sessionId,
+    context: {
+      repoRoot: context.repoRoot,
+      branch: context.branch,
+      summary: context.summary
+    },
     copilot: {
       status: rawOutput ? 0 : 1,
       stdout: rawOutput,
       reasoning: result.reasoning
-    }
+    },
+    result: parsed.parsed,
+    rawOutput: parsed.rawOutput,
+    parseError: parsed.parseError,
+    reasoningSummary: result.reasoning ? [result.reasoning] : [],
+    // A review is read-only, so touchedFiles should stay empty; recording
+    // both makes a violation visible instead of silently absorbed.
+    touchedFiles: result.touchedFiles ?? [],
+    denials: result.denials ?? []
   };
   return {
     exitStatus: rawOutput ? 0 : 1,
@@ -284,14 +256,29 @@ export async function executeReviewRun(request) {
     copilotSessionId: result.sessionId ?? null,
     threadId: result.sessionId ?? null,
     payload,
-    rendered: renderReviewResult(
-      { parsed: null, parseError: null, rawOutput },
-      { reviewLabel: reviewName, targetLabel: context.target.label, reasoningSummary: [] }
-    ),
-    summary: firstMeaningfulLine(rawOutput, `${reviewName} completed.`),
+    rendered: renderReviewResult(parsed, {
+      reviewLabel: reviewName,
+      targetLabel: context.target.label,
+      reasoningSummary: result.reasoning ? [result.reasoning] : []
+    }),
+    summary: parsed.parsed?.summary ?? parsed.parseError ?? firstMeaningfulLine(rawOutput, `${reviewName} finished.`),
     jobTitle: `Copilot ${reviewName}`,
     jobClass: "review",
-    targetLabel: context.target.label
+    targetLabel: context.target.label,
+    metrics: runMetrics(result, prompt)
+  };
+}
+
+/** What a run cost and did, for the job log. */
+function runMetrics(result, prompt) {
+  return {
+    model: result.model ?? null,
+    outputTokens: result.outputTokens ?? null,
+    promptBytes: Buffer.byteLength(String(prompt ?? ""), "utf8"),
+    toolCalls: Array.isArray(result.toolCalls) ? result.toolCalls.length : 0,
+    denials: Array.isArray(result.denials) ? result.denials.length : 0,
+    touchedFiles: Array.isArray(result.touchedFiles) ? result.touchedFiles.length : 0,
+    escalated: result.escalated === true
   };
 }
 
@@ -413,7 +400,8 @@ export async function executeTaskRun(request) {
       jobTitle: taskMetadata.title,
       jobClass: "task",
       write: Boolean(request.write),
-      unsafeShell
+      unsafeShell,
+      metrics: runMetrics(result, promptText)
     };
   }
 
@@ -446,7 +434,8 @@ export async function executeTaskRun(request) {
     jobTitle: taskMetadata.title,
     jobClass: "task",
     write: Boolean(request.write),
-    unsafeShell
+    unsafeShell,
+    metrics: runMetrics(result, promptText)
   };
 }
 
@@ -546,7 +535,8 @@ export async function executeApprovalResume(request) {
       payload: buildTaskPayload(result, { sessionId: copilotSessionId, rawOutput, unsafeShell: request.unsafeShell === true }),
       rendered: `Paused again waiting for your approval to ${result.pendingApproval?.request ?? "a request"}.\nApprove: /copilot:approve\nDeny: /copilot:deny\n`,
       summary: `Paused: ${result.pendingApproval?.request ?? "awaiting approval"}`,
-      jobClass: "task"
+      jobClass: "task",
+      metrics: runMetrics(result, reinstruct)
     };
   }
 
@@ -576,6 +566,7 @@ export async function executeApprovalResume(request) {
     rendered,
     summary: firstMeaningfulLine(rawOutput, "Resumed after approval."),
     jobClass: "task",
-    write: Boolean(request.write)
+    write: Boolean(request.write),
+    metrics: runMetrics(result, reinstruct)
   };
 }

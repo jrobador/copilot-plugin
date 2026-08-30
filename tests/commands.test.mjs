@@ -62,18 +62,14 @@ describe("copilot-companion CLI", () => {
     assert.match(result.stderr, /Unknown subcommand: nonexistent/);
   });
 
-  // Audit L1 / task P2-1. Any error whose text contains "auth" or "login" is
+  // Audit L1 / task P2-1. Any error whose text contained "auth" or "login" was
   // rewritten into "Copilot authentication failed", including this one.
-  it(
-    "reports an unknown subcommand as such even when its name contains 'auth'",
-    { todo: "P2-1: classify auth errors by error.code, not by regex on the message" },
-    () => {
-      const result = run(["authors"]);
-      assert.equal(result.status, 1);
-      assert.match(result.stderr, /Unknown subcommand: authors/);
-      assert.doesNotMatch(result.stderr, /authentication failed/);
-    }
-  );
+  it("reports an unknown subcommand as such even when its name contains 'auth'", () => {
+    const result = run(["authors"]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unknown subcommand: authors/);
+    assert.doesNotMatch(result.stderr, /authentication failed/);
+  });
 
   it("setup --json reports the fake runtime as ready", () => {
     const result = run(["setup", "--json"]);
@@ -121,5 +117,15 @@ describe("copilot-companion CLI", () => {
     const report = JSON.parse(status.stdout);
     assert.equal(report.latestFinished.status, "completed");
     assert.equal(report.latestFinished.kindLabel, "rescue");
+  });
+
+  // Last: it leaves a failed job behind, which the status test above must not see.
+  it("reports a real authentication failure as one", () => {
+    const result = run(["review", "--wait"], {
+      env: { COPILOT_FAKE_CONFIG: JSON.stringify({ auth: { isAuthenticated: false, statusMessage: "no token" } }) }
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Copilot authentication failed/);
+    assert.match(result.stderr, /copilot login/);
   });
 });

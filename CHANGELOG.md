@@ -1,9 +1,10 @@
 # Changelog
 
-## 0.1.1 — unreleased
+## 0.1.1 — 2026-08-30
 
 Hardening release driven by an audit of 0.1.0. Nothing here changes what the
-commands do; it changes what can go wrong while they do it.
+commands do; it changes what can go wrong while they do it. Every finding the
+audit left open ships with a regression test.
 
 ### Security
 
@@ -61,6 +62,28 @@ commands do; it changes what can go wrong while they do it.
 
 ### Changed
 
+- **A dead worker no longer leaves a job "running" forever, and cancelling
+  never kills a stranger.** `/copilot:status` checks whether the pid behind
+  an active job is alive and shows `stale` when it is not; `/copilot:cancel`
+  and the SessionEnd cleanup read the target's command line first and only
+  kill a companion process, so a pid the OS has since handed to something
+  else is left alone.
+- **Ending a Claude session keeps the results.** SessionEnd used to delete
+  every job record of the session, results included. It now stops that
+  session's active workers (marking them cancelled) and keeps finished jobs
+  and jobs paused for approval. `/copilot:status --all` shows other sessions'
+  jobs for the workspace.
+- One Copilot CLI per repository: clients are keyed by the canonical git root,
+  so a review started in a subdirectory no longer boots a second CLI for its
+  checks.
+- Job records default to `~/.copilot-companion` instead of the shared temp
+  directory when Claude Code provides no data directory, and the directory is
+  created owner-only on POSIX.
+- The job log records what each run cost and did: mode, model, prompt size,
+  output tokens, tool calls, denials, touched files, escalation, and the
+  Copilot session id.
+- The README's "Configuration" section described a `config.toml` this plugin
+  never read; it now says what is actually configurable and where.
 - **The review gate no longer blocks on its own failures.** Every failure to
   *run* the stop-time review -- Copilot logged out, rate limited, timed out,
   garbled output -- used to block the stop, turning an infrastructure problem

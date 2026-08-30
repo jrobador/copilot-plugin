@@ -297,17 +297,22 @@ hash of the workspace path, capped at 50 jobs.
 
 ## Configuration
 
-The plugin uses your existing Copilot configuration:
+The plugin keeps its own settings per workspace under `$CLAUDE_PLUGIN_DATA`
+(the review gate, the extra `run_command` programs), all managed through
+`/copilot:setup`. Model and reasoning effort come from the command flags
+(`--model`, `--effort`); when you pass neither, the Copilot CLI's own default
+model applies. The CLI's settings live in `~/.copilot/` (`config.json`) and
+are managed with the `copilot` command, not by this plugin.
 
-- user-level `~/.copilot/config.toml`
-- project-level `.copilot/config.toml` (only when the project is trusted)
+## Job lifecycle
 
-```toml
-model = "gpt-5.4"
-model_reasoning_effort = "high"
-```
-
-Flags passed to a command override the config for that run.
+Jobs belong to the Claude Code session that started them. `/copilot:status`
+and `/copilot:result` show that session's jobs; `/copilot:status --all` shows
+every session's jobs for the workspace. When a Claude session ends, its
+running background jobs are stopped and marked cancelled; finished jobs keep
+their results, and a job paused for approval keeps waiting. A job whose
+worker died without reporting back (killed, out of memory, reboot) shows as
+`stale`; `/copilot:cancel` closes it without touching any other process.
 
 ## FAQ
 

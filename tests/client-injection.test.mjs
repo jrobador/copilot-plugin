@@ -1,5 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -86,6 +88,26 @@ describe("SDK injection through COPILOT_COMPANION_SDK_MODULE", () => {
     const strict = await resumeSession("never-created-2", { cwd: ws, workspaceRoot: ws, allowFreshFallback: false });
     assert.equal(strict.resumed, false);
     assert.equal(strict.session, null);
+  });
+
+  // Audit L2 / task P2-2. Clients were keyed by the exact cwd string, so a
+  // review started in a subdirectory booted one CLI for the checks and another
+  // for the session.
+  it("shares one client across directories of the same repository", async () => {
+    const repo = createTempWorkspace();
+    try {
+      execSync("git init", { cwd: repo });
+      fs.mkdirSync(path.join(repo, "src"));
+      const fromRoot = await ensureClient(repo);
+      const fromSub = await ensureClient(path.join(repo, "src"));
+      const fromGitSpelling = await ensureClient(repo.split(path.sep).join("/"));
+      assert.equal(fromSub, fromRoot);
+      assert.equal(fromGitSpelling, fromRoot);
+      assert.equal(fromRoot.calls.filter((call) => call.call === "start").length, 1);
+    } finally {
+      await shutdownClient(repo);
+      cleanupDir(repo);
+    }
   });
 
   it("fails closed with SDK_MISSING when the override path does not load", async () => {

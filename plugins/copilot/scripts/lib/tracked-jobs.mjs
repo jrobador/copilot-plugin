@@ -1,9 +1,26 @@
 import fs from "node:fs";
 import process from "node:process";
 
+import { terminateProcessTree } from "./process.mjs";
 import { AWAITING_APPROVAL, readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "COPILOT_COMPANION_SESSION_ID";
+
+/** Does this command line belong to a companion process (worker or foreground run)? */
+export function isCompanionCommandLine(commandLine) {
+  return typeof commandLine === "string" && /copilot-companion\.mjs/.test(commandLine);
+}
+
+/**
+ * Kill the worker behind a job, but only if the pid still is one. The record
+ * may be hours old and the pid reused by something unrelated.
+ *
+ * @param {number|null|undefined} pid
+ * @param {object} [options]  Passed to terminateProcessTree (test seams).
+ */
+export function terminateWorker(pid, options = {}) {
+  return terminateProcessTree(pid ?? Number.NaN, { identity: isCompanionCommandLine, ...options });
+}
 
 export function nowIso() {
   return new Date().toISOString();
@@ -156,9 +173,19 @@ export async function runTrackedJob(job, runner, options = {}) {
   };
   writeJobFile(job.workspaceRoot, job.id, runningRecord);
   upsertJob(job.workspaceRoot, runningRecord);
+  const logFile = options.logFile ?? job.logFile ?? null;
+  appendLogLine(
+    logFile,
+    `Job ${job.id}: mode=${job.write ? "workspace-write" : "read-only"} model=${job.model ?? "default"} effort=${job.effort ?? "default"} pid=${process.pid}`
+  );
 
   try {
     const execution = await runner();
+    const metrics = execution.metrics ?? {};
+    appendLogLine(
+      logFile,
+      `Run: model=${metrics.model ?? "?"} promptBytes=${metrics.promptBytes ?? "?"} outputTokens=${metrics.outputTokens ?? "?"} toolCalls=${metrics.toolCalls ?? 0} denials=${metrics.denials ?? 0} touchedFiles=${metrics.touchedFiles ?? 0} escalated=${metrics.escalated ? "yes" : "no"} copilotSessionId=${execution.copilotSessionId ?? execution.sessionId ?? "?"}`
+    );
 
     // The policy paused a request for the owner: the worker finished its turn but
     // the job is not done. Store it as awaiting-approval, carrying everything a

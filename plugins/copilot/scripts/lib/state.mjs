@@ -82,14 +82,72 @@ export function ensureStateDir(cwd) {
   fs.mkdirSync(resolveJobsDir(cwd), { recursive: true });
 }
 
+/** Fields that live in the job file only; the index never carries them. */
+const JOB_FILE_ONLY_FIELDS = new Set(["result", "rendered", "request"]);
+
+function indexEntryOf(job) {
+  const entry = {};
+  for (const [key, value] of Object.entries(job)) {
+    if (!JOB_FILE_ONLY_FIELDS.has(key)) entry[key] = value;
+  }
+  return entry;
+}
+
+/**
+ * Rebuild the job index from the job files. Every job the runtime creates
+ * has one (enqueue, runTrackedJob and approve all write it), so the files are
+ * the durable record and the index is a cache of them.
+ */
+function reindexJobs(cwd) {
+  const dir = resolveJobsDir(cwd);
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const jobs = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    try {
+      const job = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
+      if (job && typeof job === "object" && typeof job.id === "string") {
+        jobs.push(indexEntryOf(job));
+      }
+    } catch {
+      // A half-written job file is skipped, not fatal.
+    }
+  }
+  return jobs;
+}
+
+/** Move an unreadable state file aside so it can be inspected, never overwritten. */
+function quarantine(stateFile) {
+  try {
+    fs.renameSync(stateFile, `${stateFile}.corrupt-${Date.now().toString(36)}`);
+  } catch {
+    // Leave it; the next atomic save replaces it anyway.
+  }
+}
+
 export function loadState(cwd) {
   const stateFile = resolveStateFile(cwd);
   if (!fs.existsSync(stateFile)) {
+    // No index, but maybe job files: a quarantined or deleted index must not
+    // make the jobs disappear. On a brand-new workspace this finds nothing.
+    const jobs = reindexJobs(cwd);
+    return jobs.length > 0 ? { ...defaultState(), jobs, recovered: true } : defaultState();
+  }
+
+  let raw;
+  try {
+    raw = fs.readFileSync(stateFile, "utf8");
+  } catch {
     return defaultState();
   }
 
   try {
-    const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    const parsed = JSON.parse(raw);
     return {
       ...defaultState(),
       ...parsed,
@@ -100,8 +158,39 @@ export function loadState(cwd) {
       jobs: Array.isArray(parsed.jobs) ? parsed.jobs : []
     };
   } catch {
-    return defaultState();
+    // A truncated or half-written index used to read as "no jobs", and the
+    // next save persisted that emptiness. Quarantine the file and rebuild the
+    // index from the job files instead, so nothing is dropped.
+    quarantine(stateFile);
+    return { ...defaultState(), jobs: reindexJobs(cwd), recovered: true };
   }
+}
+
+/**
+ * Replace the state file in one step. Readers see the old file or the new
+ * one, never a partially written one. Windows can refuse the rename while
+ * another process still has the file open; retry briefly.
+ */
+function writeFileAtomic(file, content) {
+  const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  fs.writeFileSync(tmp, content, "utf8");
+  let lastError = null;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      fs.renameSync(tmp, file);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== "EPERM" && error?.code !== "EBUSY" && error?.code !== "EACCES") break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5 * (attempt + 1));
+    }
+  }
+  try {
+    fs.unlinkSync(tmp);
+  } catch {
+    // Nothing more to do with it.
+  }
+  throw lastError;
 }
 
 function pruneJobs(jobs) {
@@ -145,7 +234,7 @@ export function saveState(cwd, state) {
     removeFileIfExists(job.logFile);
   }
 
-  fs.writeFileSync(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
+  writeFileAtomic(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`);
   return nextState;
 }
 

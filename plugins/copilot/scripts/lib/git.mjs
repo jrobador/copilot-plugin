@@ -6,6 +6,69 @@ import { runCommand, runCommandChecked } from "./process.mjs";
 
 const MAX_UNTRACKED_BYTES = 24 * 1024;
 
+/**
+ * The diff goes into the prompt whole, next to a directory attachment that
+ * lets Copilot open any file it wants. Past these sizes the diff stops helping
+ * and starts costing: a lockfile churn or a generated asset would otherwise
+ * fill the context on its own.
+ */
+export const MAX_DIFF_BYTES = 200_000;
+export const MAX_FILE_DIFF_BYTES = 40_000;
+
+/** Files whose diff body is never worth reading; they stay in --stat only. */
+const LOCKFILE_PATTERN = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|Cargo\.lock|go\.sum|poetry\.lock|Pipfile\.lock|composer\.lock|Gemfile\.lock)$/;
+
+/** Sizes are reported in the marker so the reader knows what was left out. */
+function truncationMarker(omitted) {
+  return `(truncated: ${omitted} bytes omitted; open the file to see the rest)`;
+}
+
+/**
+ * Cap a unified diff per file and in total, keeping every file's header so
+ * the reader still learns which files changed.
+ *
+ * @param {string} diff
+ * @returns {string}
+ */
+export function truncateDiff(diff) {
+  const text = String(diff ?? "");
+  if (!text) return text;
+
+  const chunks = text.split(/^(?=diff --git )/m);
+  const kept = [];
+  let total = 0;
+  let droppedFiles = 0;
+
+  for (const chunk of chunks) {
+    const headerLine = chunk.split("\n", 1)[0];
+    const fileMatch = headerLine.match(/^diff --git a\/(.+?) b\//);
+    const fileName = fileMatch ? fileMatch[1] : null;
+    let body = chunk;
+
+    if (fileName && LOCKFILE_PATTERN.test(fileName)) {
+      body = `${headerLine}\n(lockfile: body omitted)\n`;
+    } else if (Buffer.byteLength(body, "utf8") > MAX_FILE_DIFF_BYTES) {
+      const omitted = Buffer.byteLength(body, "utf8") - MAX_FILE_DIFF_BYTES;
+      body = `${body.slice(0, MAX_FILE_DIFF_BYTES)}\n${truncationMarker(omitted)}\n`;
+    }
+
+    const size = Buffer.byteLength(body, "utf8");
+    if (total + size > MAX_DIFF_BYTES) {
+      droppedFiles += 1;
+      // Keep the header so the file is at least named.
+      kept.push(`${headerLine}\n${truncationMarker(size)}\n`);
+      continue;
+    }
+    kept.push(body);
+    total += size;
+  }
+
+  if (droppedFiles > 0) {
+    kept.push(`\n(truncated: ${droppedFiles} file(s) exceeded the ${MAX_DIFF_BYTES}-byte diff budget; open them directly)\n`);
+  }
+  return kept.join("");
+}
+
 function git(cwd, args, options = {}) {
   return runCommand("git", args, { cwd, ...options });
 }
@@ -183,8 +246,9 @@ function formatUntrackedFile(cwd, relativePath) {
 
 function collectWorkingTreeContext(cwd, state) {
   const status = gitChecked(cwd, ["status", "--short"]).stdout.trim();
-  const stagedDiff = gitChecked(cwd, ["diff", "--cached", "--binary", "--no-ext-diff", "--submodule=diff"]).stdout;
-  const unstagedDiff = gitChecked(cwd, ["diff", "--binary", "--no-ext-diff", "--submodule=diff"]).stdout;
+  // No --binary: a base85 patch of an image is noise in a prompt.
+  const stagedDiff = truncateDiff(gitChecked(cwd, ["diff", "--cached", "--no-ext-diff", "--submodule=diff"]).stdout);
+  const unstagedDiff = truncateDiff(gitChecked(cwd, ["diff", "--no-ext-diff", "--submodule=diff"]).stdout);
   const untrackedBody = state.untracked.map((file) => formatUntrackedFile(cwd, file)).join("\n\n");
 
   const parts = [
@@ -207,7 +271,7 @@ function collectBranchContext(cwd, baseRef) {
   const currentBranch = getCurrentBranch(cwd);
   const logOutput = gitChecked(cwd, ["log", "--oneline", "--decorate", commitRange]).stdout.trim();
   const diffStat = gitChecked(cwd, ["diff", "--stat", commitRange]).stdout.trim();
-  const diff = gitChecked(cwd, ["diff", "--binary", "--no-ext-diff", "--submodule=diff", commitRange]).stdout;
+  const diff = truncateDiff(gitChecked(cwd, ["diff", "--no-ext-diff", "--submodule=diff", commitRange]).stdout);
 
   return {
     mode: "branch",

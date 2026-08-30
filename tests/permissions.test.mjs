@@ -443,10 +443,7 @@ describe("decidePermission: read escalation", () => {
 // Audit L8 / task P1-4. `.claude/` holds settings.json, whose hooks run on the
 // user's behalf in the next Claude Code session: same class as .git/hooks.
 describe("decidePermission: .claude/ is a protected path", () => {
-  it(
-    "refuses writes under .claude/ in both modes",
-    { todo: "P1-4: add .claude/** to PROTECTED_PATHS" },
-    () => {
+  it("refuses writes under .claude/ in both modes", () => {
       for (const mode of [READ_ONLY, WORKSPACE_WRITE]) {
         for (const fileName of [".claude/settings.json", ".claude/settings.local.json", ".claude/hooks/x.sh"]) {
           const result = decidePermission({ kind: "write", fileName }, mode, policy);
@@ -455,8 +452,8 @@ describe("decidePermission: .claude/ is a protected path", () => {
         }
       }
       assert.equal(isProtectedPath(".claude/settings.json").protected, true);
-    }
-  );
+      assert.equal(isProtectedPath(".claude-notes.md").protected, false);
+  });
 });
 
 describe("makeSentinelEscalation", () => {

@@ -47,7 +47,9 @@ export const PROTECTED_PATHS = Object.freeze([
   ".git/**",
   ".github/workflows/**",
   ".husky/**",
-  ".vscode/tasks.json"
+  ".vscode/tasks.json",
+  // settings.json hooks run in the user's next Claude Code session.
+  ".claude/**"
 ]);
 
 const IS_WINDOWS = process.platform === "win32";

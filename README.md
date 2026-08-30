@@ -60,13 +60,6 @@ If you are not signed in:
 `--with-token` to read a token from stdin. Authentication is shared with the
 `gh` CLI, so if you are already signed in there you are likely done.
 
-### Known issues (0.1.1-dev)
-
-Being fixed in this release; until then:
-
-- **The review gate blocks the session end on any failure**, including a
-  logged-out Copilot. If it loops, run `/copilot:setup --disable-review-gate`.
-
 A first run:
 
 ```bash
@@ -183,11 +176,15 @@ your account. It also manages the optional review gate:
 
 With the gate enabled, a `Stop` hook runs a targeted Copilot review of the turn
 Claude just finished and blocks the stop if it finds something that should be
-fixed first.
+fixed first. Three things keep that from running away: a clean working tree
+skips the review entirely; a review that cannot run (Copilot logged out, rate
+limited, timed out) is logged and never blocks; and after two consecutive
+blocks the gate switches itself off until you re-enable it.
 
 > [!WARNING]
-> The review gate can create a long-running Claude/Copilot loop and drain usage
-> limits quickly. Enable it only when you are watching the session.
+> Even so, the review gate can keep a Claude/Copilot loop going for a couple of
+> turns and spend usage on both sides. Enable it only when you are watching the
+> session.
 
 ## Choosing the model
 

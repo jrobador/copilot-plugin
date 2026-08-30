@@ -121,25 +121,38 @@ describe("state", () => {
   });
 
   // Audit M4 / task P1-1. A half-written or truncated state.json (three
-  // detached workers and the hooks all write it with a plain writeFileSync)
-  // parses as "no state", and the next upsert persists that emptiness: every
-  // other job record is silently dropped from the index.
-  it(
-    "does not wipe the job index when state.json is unreadable",
-    { todo: "P1-1: atomic tmp+rename writes; quarantine a corrupt file instead of replacing it" },
-    () => {
-      upsertJob(tempDir, { id: "survivor", status: "completed", title: "must survive" });
-      const stateFile = path.join(resolveStateDir(tempDir), "state.json");
-      const raw = fs.readFileSync(stateFile, "utf8");
-      fs.writeFileSync(stateFile, raw.slice(0, Math.floor(raw.length / 2)), "utf8");
+  // detached workers and the hooks all wrote it with a plain writeFileSync)
+  // parsed as "no state", and the next upsert persisted that emptiness: every
+  // other job record was silently dropped from the index.
+  it("does not wipe the job index when state.json is unreadable", () => {
+    const survivor = { id: "survivor", status: "completed", title: "must survive", result: { rawOutput: "big" } };
+    writeJobFile(tempDir, survivor.id, survivor);
+    upsertJob(tempDir, { id: survivor.id, status: survivor.status, title: survivor.title });
+    const stateFile = path.join(resolveStateDir(tempDir), "state.json");
+    const raw = fs.readFileSync(stateFile, "utf8");
+    fs.writeFileSync(stateFile, raw.slice(0, Math.floor(raw.length / 2)), "utf8");
 
-      upsertJob(tempDir, { id: "newcomer", status: "queued" });
+    const recovered = loadState(tempDir);
+    assert.equal(recovered.recovered, true);
+    upsertJob(tempDir, { id: "newcomer", status: "queued" });
 
-      const ids = listJobs(tempDir).map((job) => job.id);
-      assert.ok(ids.includes("newcomer"));
-      assert.ok(ids.includes("survivor"), `survivor was dropped; index now has ${JSON.stringify(ids)}`);
-    }
-  );
+    const jobs = listJobs(tempDir);
+    const ids = jobs.map((job) => job.id);
+    assert.ok(ids.includes("newcomer"));
+    assert.ok(ids.includes("survivor"), `survivor was dropped; index now has ${JSON.stringify(ids)}`);
+    assert.ok(!("result" in jobs.find((job) => job.id === "survivor")), "the index does not carry job-file-only fields");
+    assert.ok(
+      fs.readdirSync(resolveStateDir(tempDir)).some((name) => name.startsWith("state.json.corrupt-")),
+      "the unreadable file is quarantined, not overwritten"
+    );
+  });
+
+  it("writes state.json atomically (no temp file left behind, content complete)", () => {
+    upsertJob(tempDir, { id: "atomic-1", status: "completed" });
+    const dir = resolveStateDir(tempDir);
+    assert.ok(!fs.readdirSync(dir).some((name) => name.includes(".tmp-")));
+    assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")));
+  });
 
   it("keeps queued and running jobs through a prune storm", () => {
     const state = { version: 1, config: {}, jobs: [] };

@@ -42,6 +42,16 @@ commands do; it changes what can go wrong while they do it.
   subcommand that does not exist; it is `copilot --resume <id>`.
 - Two runs of the same prompt asked the CLI to create a session with the same
   id (every stop-gate review did). Session ids now carry a unique suffix.
+- A half-written `state.json` read as "no jobs", and the next write persisted
+  that: every other job vanished from `/copilot:status`. The index is now
+  written atomically (temp file + rename), an unreadable one is quarantined as
+  `state.json.corrupt-*` instead of overwritten, and the index is rebuilt from
+  the job files, which are the durable record.
+- The argument tokenizer ate every backslash, so a Windows path in a rescue
+  prompt arrived as `C:Usersmeapp.js`, and it only ran when the slash command
+  passed a single argument, so the same prompt parsed differently depending on
+  how many flags were on the line. Backslashes now escape only quotes,
+  backslashes and whitespace, and a bare prompt is never re-tokenized.
 - Background jobs could stay `queued` forever. The detached worker was
   spawned before its job record was written, so a fast worker found nothing,
   died with its stderr discarded, and the job never moved. The record is
@@ -51,6 +61,21 @@ commands do; it changes what can go wrong while they do it.
 
 ### Changed
 
+- **The review gate no longer blocks on its own failures.** Every failure to
+  *run* the stop-time review -- Copilot logged out, rate limited, timed out,
+  garbled output -- used to block the stop, turning an infrastructure problem
+  into a Claude/Copilot loop. Only an explicit `BLOCK:` verdict blocks now;
+  everything else is logged. A clean working tree skips the review, the gate
+  switches itself off after two consecutive blocks, and its internal timeout
+  (13 min) sits below the hook's (15 min) so the verdict is never lost to the
+  host killing the hook. A job paused for approval is mentioned at stop time.
+- Review diffs are capped: 40 KB per file, 200 KB in total, lockfile bodies
+  omitted, `--binary` dropped. Every changed file is still named; the prompt
+  says what was truncated, and Copilot has the repository attached to open
+  the rest. Before this a large change blew past `spawnSync`'s 1 MB buffer
+  and the review died with `ENOBUFS`.
+- `.claude/` joins the protected paths: its `settings.json` hooks run in the
+  user's next Claude Code session.
 - **Rescues are read-only by default.** The rescue subagent used to add
   `--write` on its own -- and was told to trigger itself proactively -- so the
   most automatic path was also the most privileged one: "investigate why the

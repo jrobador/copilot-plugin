@@ -73,6 +73,9 @@ export function parseArgs(argv, config = {}) {
   return { options, positionals };
 }
 
+/** A backslash escapes only what a shell would need it to escape. */
+const ESCAPABLE = new Set(['"', "'", "\\"]);
+
 export function splitRawArgumentString(raw) {
   const tokens = [];
   let current = "";
@@ -81,7 +84,9 @@ export function splitRawArgumentString(raw) {
 
   for (const character of raw) {
     if (escaping) {
-      current += character;
+      // Anything else keeps its backslash: `C:\Users\me` is a path, not four
+      // escape sequences.
+      current += ESCAPABLE.has(character) || /\s/.test(character) ? character : `\\${character}`;
       escaping = false;
       continue;
     }
@@ -125,4 +130,28 @@ export function splitRawArgumentString(raw) {
   }
 
   return tokens;
+}
+
+/** Does this text carry a flag a slash command would pass, e.g. `--base main`? */
+const PACKED_FLAG = /(^|\s)--?[a-z][a-z0-9-]*(=|\s|$)/i;
+
+/**
+ * Claude Code hands a slash command's arguments to the companion as one
+ * string. Re-tokenize it only when it looks like packed flags: a bare prompt
+ * ("fix C:\x\y.js") is kept whole, so quotes and backslashes inside it survive
+ * regardless of how many other tokens happen to be on the line.
+ */
+export function normalizeArgv(argv) {
+  if (argv.length !== 1) {
+    return argv;
+  }
+  const [raw] = argv;
+  if (typeof raw !== "string" || !raw.trim()) {
+    return [];
+  }
+  const text = raw.trim();
+  if (text.startsWith("-") || PACKED_FLAG.test(text)) {
+    return splitRawArgumentString(text);
+  }
+  return [text];
 }

@@ -8,7 +8,8 @@ Review {{TARGET_LABEL}}.
 User focus: {{USER_FOCUS}}
 The diff is provided below. It is the subject of the review, not the limit of it:
 open the files it touches and their callers when you need to judge whether a
-change is correct.
+change is correct. Large hunks and lockfiles are truncated in the diff (marked
+"truncated" / "body omitted"); open the file when you need what was left out.
 </task>
 
 <review_method>

@@ -9,6 +9,8 @@ import {
   assertSafeRef,
   ensureGitRepository,
   getRepoRoot,
+  MAX_DIFF_BYTES,
+  truncateDiff,
   detectDefaultBranch,
   getCurrentBranch,
   getWorkingTreeState,
@@ -126,26 +128,39 @@ describe("git", () => {
     }
   });
 
-  // Audit M5 / task P1-5. The diff is pasted whole into the prompt; only
-  // untracked files have a size cap. A 1 MB change to a tracked file must be
+  // Audit M5 / task P1-5. The diff used to be pasted whole into the prompt;
+  // only untracked files had a size cap. A 1 MB change to a tracked file is
   // truncated with a marker instead of shipped verbatim.
-  it(
-    "collectReviewContext caps the diff size and marks the truncation",
-    { todo: "P1-5: drop --binary, cap per-file and total diff bytes" },
-    async () => {
-      const git = await import("../plugins/copilot/scripts/lib/git.mjs");
-      assert.ok(Number.isInteger(git.MAX_DIFF_BYTES), "MAX_DIFF_BYTES is not exported yet");
-      const big = path.join(tempDir, "file.txt");
-      const original = fs.readFileSync(big);
-      fs.writeFileSync(big, "x".repeat(1024 * 1024));
-      try {
-        const target = resolveReviewTarget(tempDir, { scope: "working-tree" });
-        const context = collectReviewContext(tempDir, target);
-        assert.ok(context.content.length < git.MAX_DIFF_BYTES + 4096, `content is ${context.content.length} bytes`);
-        assert.match(context.content, /truncated/i);
-      } finally {
-        fs.writeFileSync(big, original);
-      }
+  it("collectReviewContext caps the diff size and marks the truncation", () => {
+    const big = path.join(tempDir, "file.txt");
+    const original = fs.readFileSync(big);
+    fs.writeFileSync(big, "x".repeat(1024 * 1024));
+    try {
+      const target = resolveReviewTarget(tempDir, { scope: "working-tree" });
+      const context = collectReviewContext(tempDir, target);
+      assert.ok(context.content.length < MAX_DIFF_BYTES + 4096, `content is ${context.content.length} bytes`);
+      assert.match(context.content, /truncated: \d+ bytes omitted/);
+      assert.match(context.content, /diff --git a\/file\.txt/, "the file header survives");
+    } finally {
+      fs.writeFileSync(big, original);
     }
-  );
+  });
+
+  it("truncateDiff keeps small diffs intact, drops lockfile bodies, and budgets across files", () => {
+    const small = "diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-x\n+y\n";
+    assert.equal(truncateDiff(small), small);
+
+    const lock = "diff --git a/package-lock.json b/package-lock.json\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1 +1 @@\n-1\n+2\n";
+    assert.match(truncateDiff(lock), /lockfile: body omitted/);
+    assert.doesNotMatch(truncateDiff(lock), /\+2/);
+
+    const oneFile = (name, size) => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n+${"z".repeat(size)}\n`;
+    const many = Array.from({ length: 8 }, (_, index) => oneFile(`f${index}.js`, 39_000)).join("");
+    const result = truncateDiff(many);
+    assert.ok(Buffer.byteLength(result, "utf8") < MAX_DIFF_BYTES + 8 * 200, `result is ${result.length} bytes`);
+    assert.match(result, /file\(s\) exceeded the \d+-byte diff budget/);
+    for (let index = 0; index < 8; index += 1) {
+      assert.match(result, new RegExp(`diff --git a/f${index}\\.js`), "every file is still named");
+    }
+  });
 });

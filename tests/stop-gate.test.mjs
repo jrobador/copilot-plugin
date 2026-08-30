@@ -1,7 +1,18 @@
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
-import { decideStop, parseStopReviewOutput, runStopReview } from "../plugins/copilot/scripts/stop-review-gate-hook.mjs";
+import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
+import { getConfig, setConfig } from "../plugins/copilot/scripts/lib/state.mjs";
+import {
+  applyBlockBudget,
+  decideStop,
+  GATE_MAX_CONSECUTIVE_BLOCKS,
+  parseStopReviewOutput,
+  runStopReview
+} from "../plugins/copilot/scripts/stop-review-gate-hook.mjs";
 
 const child = (overrides = {}) => ({ status: 0, stdout: "", stderr: "", error: undefined, ...overrides });
 const answering = (rawOutput) => () => child({ stdout: JSON.stringify({ rawOutput }) });
@@ -14,9 +25,14 @@ describe("stop gate: parseStopReviewOutput", () => {
     assert.match(blocked.reason, /never terminates/);
   });
 
-  it("treats an empty or unexpected answer as not ok", () => {
-    assert.equal(parseStopReviewOutput("").ok, false);
-    assert.equal(parseStopReviewOutput("I think it is fine").ok, false);
+  it("treats an empty or unexpected answer as not ok and not blocked", () => {
+    for (const answer of ["", "I think it is fine"]) {
+      const review = parseStopReviewOutput(answer);
+      assert.equal(review.ok, false);
+      assert.equal(review.blocked, false);
+    }
+    assert.equal(parseStopReviewOutput("BLOCK: x").blocked, true);
+    assert.equal(parseStopReviewOutput("ALLOW: y").blocked, false);
   });
 });
 
@@ -52,18 +68,58 @@ describe("stop gate: runStopReview", () => {
   });
 
   // Audit M3 / task P1-3. Every failure to *run* the review (Copilot logged
-  // out, rate limited, timed out, garbled output) currently blocks the stop,
-  // which turns an infrastructure problem into a Claude/Copilot loop.
+  // out, rate limited, timed out, garbled output) used to block the stop,
+  // which turned an infrastructure problem into a Claude/Copilot loop.
   for (const [label, spawnImpl] of [
     ["the task exits non-zero", () => child({ status: 1, stderr: "Copilot is not authenticated" })],
     ["the task times out", () => child({ status: null, error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }) })],
     ["the task prints invalid JSON", () => child({ stdout: "not json" })],
     ["the task returns no final message", answering("")]
   ]) {
-    it(`does not block the stop when ${label}`, { todo: "P1-3: only an explicit BLOCK verdict blocks; infrastructure failures are logged" }, () => {
+    it(`does not block the stop when ${label}`, () => {
       const review = runStopReview(process.cwd(), {}, { spawnImpl });
       assert.equal(review.ok, false, "the review did not succeed");
+      assert.equal(review.blocked, false);
+      assert.match(review.reason, /not blocked|manually/);
       assert.equal(decideStop(review), null, `expected no block decision; got ${JSON.stringify(decideStop(review))}`);
     });
   }
+});
+
+describe("stop gate: block budget", () => {
+  let repo;
+  let previousDataDir;
+
+  before(() => {
+    repo = createTempWorkspace();
+    execSync("git init", { cwd: repo });
+    fs.writeFileSync(path.join(repo, "f.txt"), "x\n");
+    previousDataDir = process.env.CLAUDE_PLUGIN_DATA;
+    process.env.CLAUDE_PLUGIN_DATA = path.join(repo, ".plugin-data");
+    setConfig(repo, "stopReviewGate", true);
+  });
+
+  after(() => {
+    if (previousDataDir === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
+    else process.env.CLAUDE_PLUGIN_DATA = previousDataDir;
+    cleanupDir(repo);
+  });
+
+  it("switches the gate off after consecutive blocks and resets on an allow", () => {
+    assert.deepEqual(applyBlockBudget(repo, false), { count: 0, disabled: false });
+
+    let last = null;
+    for (let index = 1; index <= GATE_MAX_CONSECUTIVE_BLOCKS; index += 1) {
+      last = applyBlockBudget(repo, true);
+      assert.equal(last.count, index);
+    }
+    assert.equal(last.disabled, true);
+    assert.equal(getConfig(repo).stopReviewGate, false, "the gate disables itself");
+    assert.equal(getConfig(repo).gateConsecutiveBlocks, 0);
+
+    setConfig(repo, "stopReviewGate", true);
+    assert.equal(applyBlockBudget(repo, true).count, 1);
+    assert.equal(applyBlockBudget(repo, false).count, 0, "an allow resets the streak");
+    assert.equal(getConfig(repo).stopReviewGate, true);
+  });
 });

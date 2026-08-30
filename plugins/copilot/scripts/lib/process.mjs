@@ -100,7 +100,10 @@ export function runCommand(command, args = [], options = {}) {
     input: options.input,
     stdio: options.stdio ?? "pipe",
     shell: useShell,
-    windowsHide: true
+    windowsHide: true,
+    // Node's default is 1 MB, which a real diff exceeds; the caller caps what
+    // it keeps (truncateDiff), so the buffer only has to hold what git emits.
+    maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024
   });
 
   return {

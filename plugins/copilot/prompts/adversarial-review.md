@@ -83,5 +83,8 @@ Before finalizing, check that each finding is:
 </final_check>
 
 <repository_context>
+Large hunks and lockfiles are truncated below (marked "truncated" / "body
+omitted"); open the file when you need what was left out.
+
 {{REVIEW_INPUT}}
 </repository_context>

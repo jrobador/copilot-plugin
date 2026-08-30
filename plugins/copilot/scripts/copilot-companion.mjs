@@ -39,10 +39,12 @@ import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
   readStoredJob,
+  resolveApprovableJob,
   resolveCancelableJob,
   resolveResultJob,
   sortJobsNewestFirst
 } from "./lib/job-control.mjs";
+import { makeSentinelEscalation } from "./lib/permissions.mjs";
 import {
   appendLogLine,
   createJobLogFile,
@@ -94,6 +96,8 @@ function printUsage() {
       "  node scripts/copilot-companion.mjs task [--background] [--write] [--unsafe-shell] [--allow-wide-root] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <low|medium|high|xhigh|max>] [prompt]",
       "  node scripts/copilot-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/copilot-companion.mjs result [job-id] [--json]",
+      "  node scripts/copilot-companion.mjs approve [job-id] [--json]",
+      "  node scripts/copilot-companion.mjs deny [job-id] [--json]",
       "  node scripts/copilot-companion.mjs cancel [job-id] [--json]"
     ].join("\n")
   );
@@ -539,7 +543,11 @@ async function executeTaskRun(request) {
     reasoningEffort: request.effort,
     permissionMode,
     unsafeShell,
-    extraPrograms
+    extraPrograms,
+    // Reads flagged for the owner pause the job (v1: a sentinel filename). Reads
+    // the owner already approved in a prior escalation pass straight through.
+    escalateReads: makeSentinelEscalation(),
+    approvedReads: new Set(Array.isArray(request.approvedReads) ? request.approvedReads : [])
   };
 
   const { session, resumed } = request.resumeLast
@@ -573,6 +581,37 @@ async function executeTaskRun(request) {
   const result = await runPrompt(session, promptText, { onProgress: request.onProgress });
   const rawOutput = result.content ?? "";
   const failureMessage = "";
+
+  // The policy paused a request for the owner. Hand back an escalated result so
+  // the job is stored as awaiting-approval instead of completed, with enough to
+  // revive it: the Copilot session id and the fields needed to resume.
+  if (result.escalated) {
+    const copilotSessionId = result.sessionId ?? sessionId;
+    return {
+      escalated: true,
+      exitStatus: 0,
+      sessionId: copilotSessionId,
+      copilotSessionId,
+      pendingApproval: result.pendingApproval,
+      revive: {
+        cwd: request.cwd,
+        workspaceRoot,
+        model: request.model,
+        effort: request.effort,
+        write: Boolean(request.write),
+        unsafeShell
+      },
+      payload: buildTaskPayload(result, { sessionId, rawOutput, unsafeShell }),
+      rendered: `${taskMetadata.title} is paused waiting for your approval to ${
+        result.pendingApproval?.request ?? "a request"
+      }.\nApprove: /copilot:approve\nDeny: /copilot:deny\n`,
+      summary: `Paused: ${result.pendingApproval?.request ?? "awaiting approval"}`,
+      jobTitle: taskMetadata.title,
+      jobClass: "task",
+      write: Boolean(request.write),
+      unsafeShell
+    };
+  }
 
   const payload = buildTaskPayload(result, { sessionId, rawOutput, unsafeShell });
   const rendered = renderTaskResult(
@@ -1038,6 +1077,232 @@ function handleTaskResumeCandidate(argv) {
   outputCommandResult(payload, rendered, options.json);
 }
 
+/**
+ * Revive a job that was paused on the owner's approval. Resumes the Copilot
+ * session (full history), allows the approved path, and re-instructs the model
+ * to redo the action. Proven by the Phase 0 spike; a pending permission cannot
+ * be frozen and continued, so the model re-attempts instead.
+ */
+async function executeApprovalResume(request) {
+  const workspaceRoot = request.workspaceRoot ?? resolveWorkspaceRoot(request.cwd);
+  await ensureCopilotReady(request.cwd);
+
+  const permissionMode = request.write ? WORKSPACE_WRITE : READ_ONLY;
+  const approvedFile = request.pendingApproval?.file ?? null;
+  const { session, resumed } = await resumeSession(request.copilotSessionId, {
+    cwd: request.cwd,
+    workspaceRoot,
+    model: request.model,
+    reasoningEffort: request.effort,
+    permissionMode,
+    unsafeShell: request.unsafeShell === true,
+    extraPrograms: getConfig(workspaceRoot).extraPrograms ?? [],
+    escalateReads: makeSentinelEscalation(),
+    approvedReads: new Set(approvedFile ? [approvedFile] : []),
+    // An approval-resume must reuse the frozen context; a fresh session would
+    // silently restart the whole task. If the state is gone, the job expired.
+    allowFreshFallback: false
+  });
+
+  if (!resumed || !session) {
+    return {
+      expired: true,
+      exitStatus: 1,
+      sessionId: request.copilotSessionId,
+      payload: { status: 1, sessionId: request.copilotSessionId, rawOutput: "", touchedFiles: [], denials: [] },
+      rendered: `This job's Copilot session (${request.copilotSessionId}) is no longer available, so it cannot be resumed. Re-run the original task.\n`,
+      summary: "Session expired before approval",
+      jobClass: "task"
+    };
+  }
+
+  const target = request.pendingApproval?.request ?? (approvedFile ? `read ${approvedFile}` : "the paused action");
+  const reinstruct = `The owner has approved the request that was paused (${target}). Please carry it out now and continue the task.`;
+  const result = await runPrompt(session, reinstruct, { onProgress: request.onProgress });
+  const rawOutput = result.content ?? "";
+
+  // A second, different escalation can happen; re-suspend on the same path.
+  if (result.escalated) {
+    const copilotSessionId = result.sessionId ?? request.copilotSessionId;
+    return {
+      escalated: true,
+      exitStatus: 0,
+      sessionId: copilotSessionId,
+      copilotSessionId,
+      pendingApproval: result.pendingApproval,
+      revive: {
+        cwd: request.cwd,
+        workspaceRoot,
+        model: request.model,
+        effort: request.effort,
+        write: Boolean(request.write),
+        unsafeShell: request.unsafeShell === true
+      },
+      payload: buildTaskPayload(result, { sessionId: copilotSessionId, rawOutput, unsafeShell: request.unsafeShell === true }),
+      rendered: `Paused again waiting for your approval to ${result.pendingApproval?.request ?? "a request"}.\nApprove: /copilot:approve\nDeny: /copilot:deny\n`,
+      summary: `Paused: ${result.pendingApproval?.request ?? "awaiting approval"}`,
+      jobClass: "task"
+    };
+  }
+
+  const payload = buildTaskPayload(result, {
+    sessionId: request.copilotSessionId,
+    rawOutput,
+    unsafeShell: request.unsafeShell === true
+  });
+  const rendered = renderTaskResult(
+    { rawOutput, failureMessage: "", reasoningSummary: payload.reasoningSummary },
+    {
+      title: request.title ?? "Copilot Task",
+      jobId: request.jobId ?? null,
+      write: Boolean(request.write),
+      touchedFiles: payload.touchedFiles,
+      denials: payload.denials,
+      unsafeShell: request.unsafeShell === true
+    }
+  );
+  return {
+    exitStatus: rawOutput ? 0 : 1,
+    sessionId: result.sessionId ?? request.copilotSessionId,
+    payload,
+    rendered,
+    summary: firstMeaningfulLine(rawOutput, "Resumed after approval."),
+    jobClass: "task",
+    write: Boolean(request.write)
+  };
+}
+
+function spawnDetachedApproveWorker(cwd, jobId) {
+  const scriptPath = path.join(ROOT_DIR, "scripts", "copilot-companion.mjs");
+  const child = spawn(process.execPath, [scriptPath, "approve-worker", "--cwd", cwd, "--job-id", jobId], {
+    cwd,
+    env: process.env,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.unref();
+  return child;
+}
+
+async function handleApprove(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const reference = positionals[0] ?? "";
+  const { workspaceRoot, job } = resolveApprovableJob(cwd, reference);
+
+  if (!job.copilotSessionId || !job.revive) {
+    throw new Error(`Job ${job.id} cannot be resumed: it is missing the Copilot session to revive.`);
+  }
+
+  // Re-arm the job as queued and hand it to a detached worker that resumes the
+  // session, allows the approved path, and re-instructs the model.
+  const child = spawnDetachedApproveWorker(cwd, job.id);
+  appendLogLine(job.logFile, `Approved by owner: ${job.pendingApproval?.request ?? "request"}.`);
+  const queuedRecord = {
+    ...job,
+    status: "queued",
+    phase: "queued",
+    pid: child.pid ?? null,
+    approvedAt: nowIso()
+  };
+  writeJobFile(workspaceRoot, job.id, queuedRecord);
+  upsertJob(workspaceRoot, {
+    id: job.id,
+    status: "queued",
+    phase: "queued",
+    pid: child.pid ?? null,
+    approvedAt: queuedRecord.approvedAt
+  });
+
+  const payload = { jobId: job.id, status: "resuming", title: job.title };
+  outputCommandResult(
+    payload,
+    `Approved. ${job.title} is resuming as ${job.id}. Check /copilot:status ${job.id} for progress.\n`,
+    options.json
+  );
+}
+
+async function handleApproveWorker(argv) {
+  const { options } = parseCommandInput(argv, { valueOptions: ["cwd", "job-id"] });
+  if (!options["job-id"]) {
+    throw new Error("Missing required --job-id for approve-worker.");
+  }
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const storedJob = readStoredJob(workspaceRoot, options["job-id"]);
+  if (!storedJob) {
+    throw new Error(`No stored job found for ${options["job-id"]}.`);
+  }
+  if (!storedJob.revive || !storedJob.copilotSessionId) {
+    throw new Error(`Stored job ${options["job-id"]} has no revive context.`);
+  }
+
+  const { logFile, progress } = createTrackedProgress(
+    { ...storedJob, workspaceRoot },
+    { logFile: storedJob.logFile ?? null }
+  );
+  await runTrackedJob(
+    { ...storedJob, workspaceRoot, logFile },
+    () =>
+      executeApprovalResume({
+        ...storedJob.revive,
+        copilotSessionId: storedJob.copilotSessionId,
+        pendingApproval: storedJob.pendingApproval,
+        title: storedJob.title,
+        jobId: storedJob.id,
+        onProgress: progress
+      }),
+    { logFile }
+  );
+}
+
+async function handleDeny(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const reference = positionals[0] ?? "";
+  const { workspaceRoot, job } = resolveApprovableJob(cwd, reference);
+  const existing = readStoredJob(workspaceRoot, job.id) ?? {};
+
+  appendLogLine(job.logFile, `Denied by owner: ${job.pendingApproval?.request ?? "request"}.`);
+  const completedAt = nowIso();
+  const nextJob = {
+    ...existing,
+    ...job,
+    status: "cancelled",
+    phase: "cancelled",
+    pid: null,
+    completedAt,
+    cancelledAt: completedAt,
+    errorMessage: `Denied by owner: ${job.pendingApproval?.request ?? "request"}.`
+  };
+  writeJobFile(workspaceRoot, job.id, nextJob);
+  upsertJob(workspaceRoot, {
+    id: job.id,
+    status: "cancelled",
+    phase: "cancelled",
+    pid: null,
+    completedAt,
+    errorMessage: nextJob.errorMessage
+  });
+
+  const payload = { jobId: job.id, status: "denied", title: job.title };
+  outputCommandResult(
+    payload,
+    `Denied ${job.pendingApproval?.request ?? "the request"}. Job ${job.id} is closed.\n`,
+    options.json
+  );
+}
+
 async function handleCancel(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
@@ -1121,6 +1386,15 @@ async function main() {
       break;
     case "cancel":
       await handleCancel(argv);
+      break;
+    case "approve":
+      await handleApprove(argv);
+      break;
+    case "approve-worker":
+      await handleApproveWorker(argv);
+      break;
+    case "deny":
+      await handleDeny(argv);
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);

@@ -102,4 +102,33 @@ describe("state", () => {
     const saved = saveState(tempDir, state);
     assert.ok(saved.jobs.length <= 50);
   });
+
+  it("never prunes a job that is still in play, even past 50", () => {
+    const state = { version: 1, config: {}, jobs: [] };
+    // One paused-for-approval job, made the OLDEST so a naive prune would drop it.
+    state.jobs.push({
+      id: "await-me",
+      status: "awaiting-approval",
+      updatedAt: new Date(Date.now() - 10_000_000).toISOString()
+    });
+    for (let i = 0; i < 60; i++) {
+      state.jobs.push({ id: `done-${i}`, status: "completed", updatedAt: new Date(Date.now() - i * 1000).toISOString() });
+    }
+    const saved = saveState(tempDir, state);
+    assert.ok(saved.jobs.some((j) => j.id === "await-me"), "awaiting-approval job must survive pruning");
+    // queued and running are protected too.
+    assert.ok(saved.jobs.length >= 50);
+  });
+
+  it("keeps queued and running jobs through a prune storm", () => {
+    const state = { version: 1, config: {}, jobs: [] };
+    state.jobs.push({ id: "queued-1", status: "queued", updatedAt: new Date(0).toISOString() });
+    state.jobs.push({ id: "running-1", status: "running", updatedAt: new Date(1).toISOString() });
+    for (let i = 0; i < 60; i++) {
+      state.jobs.push({ id: `f-${i}`, status: "failed", updatedAt: new Date(Date.now() - i * 1000).toISOString() });
+    }
+    const saved = saveState(tempDir, state);
+    assert.ok(saved.jobs.some((j) => j.id === "queued-1"));
+    assert.ok(saved.jobs.some((j) => j.id === "running-1"));
+  });
 });

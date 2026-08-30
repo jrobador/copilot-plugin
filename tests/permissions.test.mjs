@@ -8,6 +8,7 @@ import {
   decidePermission,
   describeRequest,
   isProtectedPath,
+  makeSentinelEscalation,
   normalizeMode,
   PROTECTED_PATHS,
   READ_ONLY,
@@ -381,5 +382,70 @@ describe("decidePermission: custom tools", () => {
       assert.equal(other.allowed, false);
       assert.match(other.reason, /not registered/);
     }
+  });
+});
+
+describe("decidePermission: read escalation", () => {
+  const escalate = makeSentinelEscalation("ESCALATE_ME.txt");
+
+  it("escalates a flagged read: denied at the wire but marked for the owner", () => {
+    const result = decidePermission(
+      { kind: "read", path: "ESCALATE_ME.txt" },
+      READ_ONLY,
+      { workspaceRoot: ws, escalateReads: escalate }
+    );
+    assert.equal(result.escalate, true);
+    assert.equal(result.allowed, false);
+    assert.equal(result.decision.kind, "reject"); // wire-level deny
+    assert.equal(result.file, "ESCALATE_ME.txt");
+    assert.match(result.reason, /approv/i);
+  });
+
+  it("leaves ordinary reads untouched when a predicate is present", () => {
+    const result = decidePermission(
+      { kind: "read", path: "src/index.js" },
+      READ_ONLY,
+      { workspaceRoot: ws, escalateReads: escalate }
+    );
+    assert.equal(result.allowed, true);
+    assert.notEqual(result.escalate, true);
+  });
+
+  it("allows a flagged read once the owner approved that path", () => {
+    const result = decidePermission(
+      { kind: "read", path: "ESCALATE_ME.txt" },
+      READ_ONLY,
+      { workspaceRoot: ws, escalateReads: escalate, approvedReads: new Set(["ESCALATE_ME.txt"]) }
+    );
+    assert.equal(result.allowed, true);
+    assert.notEqual(result.escalate, true);
+  });
+
+  it("does not escalate without a predicate (default behaviour unchanged)", () => {
+    const result = decidePermission({ kind: "read", path: "ESCALATE_ME.txt" }, READ_ONLY, { workspaceRoot: ws });
+    assert.equal(result.allowed, true);
+    assert.notEqual(result.escalate, true);
+  });
+
+  it("the handler forwards the escalate flag to the observer", () => {
+    let entry = null;
+    const handler = createPermissionHandler(READ_ONLY, (e) => (entry = e), {
+      workspaceRoot: ws,
+      escalateReads: escalate
+    });
+    const decision = handler({ kind: "read", path: "ESCALATE_ME.txt" });
+    assert.equal(decision.kind, "reject");
+    assert.equal(entry.escalate, true);
+    assert.equal(entry.file, "ESCALATE_ME.txt");
+  });
+});
+
+describe("makeSentinelEscalation", () => {
+  it("matches the sentinel basename anywhere in the tree, case-insensitively on Windows", () => {
+    const escalate = makeSentinelEscalation("ESCALATE_ME.txt");
+    assert.equal(escalate("ESCALATE_ME.txt"), true);
+    assert.equal(escalate("nested/dir/ESCALATE_ME.txt"), true);
+    assert.equal(escalate("src/index.js"), false);
+    assert.equal(escalate(""), false);
   });
 });

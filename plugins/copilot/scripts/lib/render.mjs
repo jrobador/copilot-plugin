@@ -145,6 +145,11 @@ function pushJobDetails(lines, job, options = {}) {
   if (job.logFile && options.showLog) {
     lines.push(`  Log: ${job.logFile}`);
   }
+  if (job.status === "awaiting-approval") {
+    lines.push(`  Wants to: ${job.pendingApproval?.request ?? "a request"}`);
+    lines.push(`  Approve: /copilot:approve ${job.id}`);
+    lines.push(`  Deny: /copilot:deny ${job.id}`);
+  }
   if ((job.status === "queued" || job.status === "running") && options.showCancelHint) {
     lines.push(`  Cancel: /copilot:cancel ${job.id}`);
   }
@@ -384,6 +389,20 @@ export function renderStatusReport(report) {
     lines.push("");
   }
 
+  if (report.awaitingApproval?.length > 0) {
+    lines.push("Awaiting your approval:");
+    for (const job of report.awaitingApproval) {
+      lines.push(`- ${formatJobLine(job)}`);
+      lines.push(`  Wants to: ${job.pendingApproval?.request ?? "a request"}`);
+      if (job.pendingApproval?.reason) {
+        lines.push(`  Why paused: ${job.pendingApproval.reason}`);
+      }
+      lines.push(`  Approve: /copilot:approve ${job.id}`);
+      lines.push(`  Deny: /copilot:deny ${job.id}`);
+    }
+    lines.push("");
+  }
+
   if (report.latestFinished) {
     lines.push("Latest finished:");
     pushJobDetails(lines, report.latestFinished, {
@@ -402,7 +421,7 @@ export function renderStatusReport(report) {
       });
     }
     lines.push("");
-  } else if (report.running.length === 0 && !report.latestFinished) {
+  } else if (report.running.length === 0 && !report.latestFinished && !(report.awaitingApproval?.length > 0)) {
     lines.push("No jobs recorded yet.", "");
   }
 

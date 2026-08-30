@@ -103,6 +103,39 @@ function deny(reason) {
   return { decision: reject(reason), allowed: false, reason, file: null };
 }
 
+/**
+ * Escalation is a deny at the wire level — a pending permission does not survive
+ * a session disconnect, so we cannot freeze it and resume it (proven by the
+ * Phase 0 spike). The `escalate: true` flag is what tells our own run loop to
+ * suspend the job into `awaiting-approval` instead of letting it complete as a
+ * normal denial; on approval the session is resumed and the model re-attempts
+ * the action, now allowed.
+ */
+function escalate(reason, file = null) {
+  return { decision: reject(reason), allowed: false, escalate: true, reason, file };
+}
+
+/** Default v1 escalation trigger: a sentinel filename, swapped for a real
+ * secret classifier in the fast-follow. */
+export const ESCALATE_SENTINEL = process.env.COPILOT_ESCALATE_SENTINEL || "ESCALATE_ME.txt";
+
+/**
+ * Build a read-escalation predicate matching a sentinel basename. The fast-follow
+ * replaces this factory with a content-agnostic secret classifier; nothing else
+ * in the escalation machinery changes.
+ *
+ * @param {string} [sentinel]
+ * @returns {(relativePosix: string) => boolean}
+ */
+export function makeSentinelEscalation(sentinel = ESCALATE_SENTINEL) {
+  const target = protectedKey(sentinel);
+  return (relativePosix) => {
+    if (typeof relativePosix !== "string" || relativePosix === "") return false;
+    const base = relativePosix.split("/").pop() ?? relativePosix;
+    return protectedKey(base) === target;
+  };
+}
+
 export function normalizeMode(mode) {
   if (mode === true) return WORKSPACE_WRITE;
   if (mode === false || mode == null) return READ_ONLY;
@@ -176,6 +209,17 @@ export function decidePermission(request, mode = READ_ONLY, policy = {}) {
   const kind = request?.kind;
   const workspace = resolvePolicy(policy);
 
+  // Escalation config is read from the raw policy arg, not the resolved
+  // workspace: when the policy is a loose {workspaceRoot, cwd, ...} shape,
+  // resolvePolicy rebuilds a bare workspace and would drop these.
+  const escalateReads = typeof policy?.escalateReads === "function" ? policy.escalateReads : null;
+  const approvedReads =
+    policy?.approvedReads instanceof Set
+      ? policy.approvedReads
+      : Array.isArray(policy?.approvedReads)
+        ? new Set(policy.approvedReads)
+        : null;
+
   // The SDK sets this only when a host configures `sandbox.allowBypass`, which
   // we never do, so in practice it never arrives. Kept as defense in depth:
   // if a runtime ever does ask, the answer is still no, in either mode.
@@ -189,9 +233,9 @@ export function decidePermission(request, mode = READ_ONLY, policy = {}) {
 
   switch (kind) {
     case "read": {
-      // Denied in both modes. A read-only job would leak the contents into the
-      // transcript; a write job, with network access open, can send them
-      // anywhere. Neither is what "review this repo" means.
+      // Reads outside the workspace are refused in both modes: a read-only job
+      // would leak the contents into the transcript; a write job, with network
+      // access open, can send them anywhere.
       const check = isInsideWorkspace(workspace, request.path, { cwd: workspace.cwd });
       if (!check.inside) {
         return deny(
@@ -199,6 +243,18 @@ export function decidePermission(request, mode = READ_ONLY, policy = {}) {
             check,
             workspace
           )}. Include the file in the prompt or run the job from a directory that contains it.`
+        );
+      }
+      // Inside the fence, one more gate for reads the owner asked to be consulted
+      // on (v1: a sentinel; fast-follow: secret-looking files). A path the owner
+      // already approved in a prior escalation is allowed straight through.
+      if (approvedReads && approvedReads.has(check.relative)) {
+        return allow("Read approved by the owner.", check.relative);
+      }
+      if (escalateReads && escalateReads(check.relative)) {
+        return escalate(
+          `Reading ${check.relative} needs the owner's approval. The job is paused; run \`/copilot:approve\` to allow it or \`/copilot:deny\` to refuse.`,
+          check.relative
         );
       }
       return allow("Read inside the workspace.", check.relative);
@@ -333,9 +389,19 @@ export function createPermissionHandler(mode, onDecision, scope = {}) {
   const effectiveMode = normalizeMode(mode);
   const root = scope.workspaceRoot ?? scope.cwd ?? process.cwd();
   const workspace = createWorkspacePolicy(root, scope.cwd ?? root);
+  // Carry the escalation config on the same policy object. resolvePolicy and
+  // isInsideWorkspace both pass a policy with `rootCanonical` through unchanged,
+  // so the extra fields survive to decidePermission.
+  const policy = { ...workspace };
+  if (typeof scope.escalateReads === "function") policy.escalateReads = scope.escalateReads;
+  if (scope.approvedReads) policy.approvedReads = scope.approvedReads;
 
   return (request) => {
-    const { decision, allowed, reason, file } = decidePermission(request, effectiveMode, workspace);
+    const { decision, allowed, reason, file, escalate: escalated } = decidePermission(
+      request,
+      effectiveMode,
+      policy
+    );
     onDecision?.({
       allowed,
       reason,
@@ -345,7 +411,10 @@ export function createPermissionHandler(mode, onDecision, scope = {}) {
       // Workspace-relative posix path of an allowed read or write, null
       // otherwise. The `request` string above is display text, not something
       // to parse back.
-      file
+      file,
+      // True when the request was flagged for the owner's decision; the run loop
+      // uses this to suspend the job instead of treating it as a plain denial.
+      escalate: escalated === true
     });
     return decision;
   };

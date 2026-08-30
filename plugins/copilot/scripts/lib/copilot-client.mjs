@@ -96,7 +96,14 @@ export function buildSessionConfig(options, permissionMode, sink) {
 
   const config = {
     clientName: CLIENT_NAME,
-    onPermissionRequest: createPermissionHandler(permissionMode, observe, { workspaceRoot, cwd }),
+    onPermissionRequest: createPermissionHandler(permissionMode, observe, {
+      workspaceRoot,
+      cwd,
+      // Reads the owner wants to be consulted on (v1: a sentinel predicate),
+      // and reads a prior escalation already approved. Both optional.
+      escalateReads: options.escalateReads,
+      approvedReads: options.approvedReads
+    }),
     // Touched files are reported back to the user, so track them.
     enableFileChangeTracking: permissionMode === WORKSPACE_WRITE,
     // The runtime's shell tools hand the model an interpreter we cannot
@@ -175,6 +182,14 @@ export async function resumeSession(sessionId, options = {}) {
     session[DECISION_SINK] = sink;
     return { session, resumed: true };
   } catch {
+    // The CLI prunes old session state. A `--resume-last` continuation is happy
+    // with a fresh session, but an approval-resume must NOT restart from scratch
+    // (it would lose the frozen context and silently re-run the whole task), so
+    // callers that require the original context pass allowFreshFallback:false
+    // and treat resumed:false as "expired".
+    if (options.allowFreshFallback === false) {
+      return { session: null, resumed: false };
+    }
     const session = await createSession({ ...options, cwd, sessionId, permissionMode });
     return { session, resumed: false };
   }
@@ -203,6 +218,9 @@ export async function runPrompt(session, prompt, options = {}) {
   const toolCalls = [];
   const denials = [];
   const touchedFiles = new Set();
+  // First permission the policy flagged for the owner's decision. Its presence
+  // is what turns a finished turn into an `awaiting-approval` job.
+  let pendingApproval = null;
   // tool.execution_complete carries only a toolCallId, never the tool name,
   // so remember what each id was called when it started.
   const toolNames = new Map();
@@ -261,6 +279,26 @@ export async function runPrompt(session, prompt, options = {}) {
   const sink = session[DECISION_SINK] ?? { current: null };
   const previousSink = sink.current;
   sink.current = (entry) => {
+    if (entry.escalate) {
+      // Denied at the wire this turn, but recorded so the job suspends into
+      // awaiting-approval instead of finishing as a plain denial. First wins.
+      if (!pendingApproval) {
+        pendingApproval = {
+          kind: entry.kind,
+          file: entry.file ?? null,
+          reason: entry.reason,
+          request: entry.request
+        };
+      }
+      onProgress?.({
+        message: `Paused for approval: ${entry.request}.`,
+        phase: "running",
+        stderrMessage: `Escalated ${entry.request}`,
+        logTitle: "Awaiting approval",
+        logBody: entry.reason
+      });
+      return;
+    }
     if (entry.allowed) {
       if (entry.kind === "write" && entry.file) {
         touchedFiles.add(entry.file);
@@ -300,7 +338,11 @@ export async function runPrompt(session, prompt, options = {}) {
       outputTokens: response?.data?.outputTokens ?? null,
       toolCalls,
       denials,
-      touchedFiles: [...touchedFiles]
+      touchedFiles: [...touchedFiles],
+      // Set when the policy paused a request for the owner. The caller writes an
+      // awaiting-approval job instead of a completed one.
+      escalated: Boolean(pendingApproval),
+      pendingApproval
     };
   } finally {
     unsubscribe?.();

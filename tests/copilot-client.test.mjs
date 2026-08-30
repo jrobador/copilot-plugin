@@ -162,6 +162,40 @@ describe("runPrompt", () => {
     assert.deepEqual(result.touchedFiles, ["src/b.js"]);
   });
 
+  it("captures an escalated request as pendingApproval, not a denial", async () => {
+    const target = session([]);
+    target[DECISION_SINK] = { current: null };
+
+    const promise = runPrompt(target, "go");
+    target[DECISION_SINK].current({
+      escalate: true,
+      allowed: false,
+      kind: "read",
+      reason: "needs owner approval",
+      mode: "read-only",
+      request: "read: ESCALATE_ME.txt",
+      file: "ESCALATE_ME.txt"
+    });
+    const result = await promise;
+
+    assert.equal(result.escalated, true);
+    assert.equal(result.pendingApproval.kind, "read");
+    assert.equal(result.pendingApproval.file, "ESCALATE_ME.txt");
+    assert.match(result.pendingApproval.request, /ESCALATE_ME/);
+    // An escalation is not counted as an ordinary denial.
+    assert.equal(result.denials.length, 0);
+  });
+
+  it("only keeps the first escalation when several fire", async () => {
+    const target = session([]);
+    target[DECISION_SINK] = { current: null };
+    const promise = runPrompt(target, "go");
+    target[DECISION_SINK].current({ escalate: true, allowed: false, kind: "read", reason: "r1", mode: "read-only", request: "read: a", file: "a" });
+    target[DECISION_SINK].current({ escalate: true, allowed: false, kind: "read", reason: "r2", mode: "read-only", request: "read: b", file: "b" });
+    const result = await promise;
+    assert.equal(result.pendingApproval.file, "a");
+  });
+
   it("restores the previous decision sink afterwards", async () => {
     const target = session([]);
     target[DECISION_SINK] = { current: null };

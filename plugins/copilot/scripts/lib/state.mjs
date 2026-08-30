@@ -12,6 +12,31 @@ const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
 
+/** A job blocked on the owner's approval of a permission (see permissions.mjs). */
+export const AWAITING_APPROVAL = "awaiting-approval";
+
+/**
+ * Finished states: safe to prune and delete.
+ */
+export const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "expired"]);
+
+export function isTerminalStatus(status) {
+  return TERMINAL_STATUSES.has(status);
+}
+
+/**
+ * States where a worker is running, about to run, or paused waiting on the
+ * owner. These are protected from pruning so a job still in play is never
+ * deleted out from under a later `/copilot:approve` or status check. Protection
+ * is opt-in for these known states; anything else (finished, or a legacy record
+ * with no status) competes for the MAX_JOBS budget as before.
+ */
+export const IN_PLAY_STATUSES = new Set(["queued", "running", AWAITING_APPROVAL]);
+
+export function isInPlayStatus(status) {
+  return IN_PLAY_STATUSES.has(status);
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -80,9 +105,16 @@ export function loadState(cwd) {
 }
 
 function pruneJobs(jobs) {
-  return [...jobs]
-    .sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")))
-    .slice(0, MAX_JOBS);
+  const sorted = [...jobs].sort((left, right) =>
+    String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? ""))
+  );
+  // Never drop a job that is still in play (queued/running/awaiting-approval).
+  // Everything else competes for the MAX_JOBS budget.
+  const inPlay = sorted.filter((job) => isInPlayStatus(job.status));
+  const prunable = sorted.filter((job) => !isInPlayStatus(job.status));
+  const room = Math.max(0, MAX_JOBS - inPlay.length);
+  const keptPrunable = new Set(prunable.slice(0, room));
+  return sorted.filter((job) => isInPlayStatus(job.status) || keptPrunable.has(job));
 }
 
 function removeFileIfExists(filePath) {

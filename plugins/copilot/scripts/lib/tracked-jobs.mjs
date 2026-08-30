@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
+import { AWAITING_APPROVAL, readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "COPILOT_COMPANION_SESSION_ID";
 
@@ -153,6 +153,66 @@ export async function runTrackedJob(job, runner, options = {}) {
 
   try {
     const execution = await runner();
+
+    // The policy paused a request for the owner: the worker finished its turn but
+    // the job is not done. Store it as awaiting-approval, carrying everything a
+    // later /copilot:approve needs to revive it, and exit without a terminal
+    // status. Pruning protects this state (see state.mjs).
+    if (execution.escalated) {
+      const copilotSessionId = execution.copilotSessionId ?? execution.sessionId ?? null;
+      const awaitingRecord = {
+        ...runningRecord,
+        status: AWAITING_APPROVAL,
+        phase: "awaiting-approval",
+        pid: null,
+        threadId: copilotSessionId,
+        copilotSessionId,
+        pendingApproval: execution.pendingApproval ?? null,
+        revive: execution.revive ?? null,
+        updatedAt: nowIso(),
+        result: execution.payload,
+        rendered: execution.rendered
+      };
+      writeJobFile(job.workspaceRoot, job.id, awaitingRecord);
+      upsertJob(job.workspaceRoot, {
+        id: job.id,
+        status: AWAITING_APPROVAL,
+        phase: "awaiting-approval",
+        pid: null,
+        threadId: copilotSessionId,
+        copilotSessionId,
+        pendingApproval: execution.pendingApproval ?? null,
+        revive: execution.revive ?? null,
+        summary: execution.summary
+      });
+      appendLogBlock(options.logFile ?? job.logFile ?? null, "Paused for approval", execution.rendered);
+      return execution;
+    }
+
+    // The session state was pruned before an approval-resume could reach it.
+    if (execution.expired) {
+      const completedAt = nowIso();
+      writeJobFile(job.workspaceRoot, job.id, {
+        ...runningRecord,
+        status: "expired",
+        phase: "failed",
+        pid: null,
+        completedAt,
+        result: execution.payload,
+        rendered: execution.rendered
+      });
+      upsertJob(job.workspaceRoot, {
+        id: job.id,
+        status: "expired",
+        phase: "failed",
+        pid: null,
+        summary: execution.summary,
+        completedAt
+      });
+      appendLogBlock(options.logFile ?? job.logFile ?? null, "Expired", execution.rendered);
+      return execution;
+    }
+
     const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
     const completedAt = nowIso();
     writeJobFile(job.workspaceRoot, job.id, {

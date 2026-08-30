@@ -1,8 +1,17 @@
 import fs from "node:fs";
 
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { AWAITING_APPROVAL, getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
 import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
+
+/** Jobs the worker is actively driving (or about to). */
+function isActive(job) {
+  return job.status === "queued" || job.status === "running";
+}
+/** Paused waiting on the owner's approval — worker has exited, but not finished. */
+function isAwaitingApproval(job) {
+  return job.status === AWAITING_APPROVAL;
+}
 
 function getSessionRuntimeStatus(env = process.env) {
   return {
@@ -123,6 +132,8 @@ function inferLegacyJobPhase(job, progressPreview = []) {
       return "failed";
     case "completed":
       return "done";
+    case AWAITING_APPROVAL:
+      return "awaiting-approval";
     default:
       break;
   }
@@ -224,15 +235,18 @@ export function buildStatusSnapshot(cwd, options = {}) {
   const maxJobs = options.maxJobs ?? DEFAULT_MAX_STATUS_JOBS;
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
 
-  const running = jobs
-    .filter((job) => job.status === "queued" || job.status === "running")
-    .map((job) => enrichJob(job, { maxProgressLines }));
+  const running = jobs.filter(isActive).map((job) => enrichJob(job, { maxProgressLines }));
 
-  const latestFinishedRaw = jobs.find((job) => job.status !== "queued" && job.status !== "running") ?? null;
+  // Jobs paused on the owner's approval get their own bucket: neither "running"
+  // (the worker has exited) nor "finished" (there is still work to do).
+  const awaitingApproval = jobs.filter(isAwaitingApproval).map((job) => enrichJob(job, { maxProgressLines }));
+
+  const isFinished = (job) => !isActive(job) && !isAwaitingApproval(job);
+  const latestFinishedRaw = jobs.find(isFinished) ?? null;
   const latestFinished = latestFinishedRaw ? enrichJob(latestFinishedRaw, { maxProgressLines }) : null;
 
   const recent = (options.all ? jobs : jobs.slice(0, maxJobs))
-    .filter((job) => job.status !== "queued" && job.status !== "running" && job.id !== latestFinished?.id)
+    .filter((job) => isFinished(job) && job.id !== latestFinished?.id)
     .map((job) => enrichJob(job, { maxProgressLines }));
 
   return {
@@ -240,6 +254,7 @@ export function buildStatusSnapshot(cwd, options = {}) {
     config,
     sessionRuntime: getSessionRuntimeStatus(options.env),
     running,
+    awaitingApproval,
     latestFinished,
     recent,
     needsReview: Boolean(config.stopReviewGate)
@@ -273,7 +288,14 @@ export function resolveResultJob(cwd, reference) {
     return { workspaceRoot, job: selected };
   }
 
-  const active = matchJobReference(jobs, reference, (job) => job.status === "queued" || job.status === "running");
+  const awaiting = matchJobReference(jobs, reference, isAwaitingApproval);
+  if (awaiting) {
+    throw new Error(
+      `Job ${awaiting.id} is paused waiting for your approval to ${awaiting.pendingApproval?.request ?? "a request"}. Run /copilot:approve ${awaiting.id} to allow it or /copilot:deny ${awaiting.id} to refuse.`
+    );
+  }
+
+  const active = matchJobReference(jobs, reference, isActive);
   if (active) {
     throw new Error(`Job ${active.id} is still ${active.status}. Check /copilot:status and try again once it finishes.`);
   }
@@ -288,22 +310,52 @@ export function resolveResultJob(cwd, reference) {
 export function resolveCancelableJob(cwd, reference) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
-  const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "running");
+  // A job paused on approval is cancelable too — cancelling abandons the pending
+  // request rather than approving or denying it.
+  const cancelable = jobs.filter((job) => isActive(job) || isAwaitingApproval(job));
 
   if (reference) {
-    const selected = matchJobReference(activeJobs, reference);
+    const selected = matchJobReference(cancelable, reference);
     if (!selected) {
       throw new Error(`No active job found for "${reference}".`);
     }
     return { workspaceRoot, job: selected };
   }
 
-  if (activeJobs.length === 1) {
-    return { workspaceRoot, job: activeJobs[0] };
+  if (cancelable.length === 1) {
+    return { workspaceRoot, job: cancelable[0] };
   }
-  if (activeJobs.length > 1) {
+  if (cancelable.length > 1) {
     throw new Error("Multiple Copilot jobs are active. Pass a job id to /copilot:cancel.");
   }
 
   throw new Error("No active Copilot jobs to cancel.");
+}
+
+/**
+ * Resolve a job that is paused on the owner's approval, for `/copilot:approve`
+ * and `/copilot:deny`. Without a reference, the single awaiting job is chosen;
+ * with several, a job id is required.
+ */
+export function resolveApprovableJob(cwd, reference) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  const awaiting = jobs.filter(isAwaitingApproval);
+
+  if (reference) {
+    const selected = matchJobReference(awaiting, reference);
+    if (!selected) {
+      throw new Error(`No job awaiting approval found for "${reference}". Run /copilot:status to list them.`);
+    }
+    return { workspaceRoot, job: selected };
+  }
+
+  if (awaiting.length === 1) {
+    return { workspaceRoot, job: awaiting[0] };
+  }
+  if (awaiting.length > 1) {
+    throw new Error("Multiple Copilot jobs are awaiting approval. Pass a job id.");
+  }
+
+  throw new Error("No Copilot jobs are awaiting approval.");
 }

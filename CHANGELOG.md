@@ -49,6 +49,17 @@ commands do; it changes what can go wrong while they do it.
   and a worker that cannot read or use its record marks the job `failed`
   with the reason instead of exiting silently.
 
+### Changed
+
+- **Rescues are read-only by default.** The rescue subagent used to add
+  `--write` on its own -- and was told to trigger itself proactively -- so the
+  most automatic path was also the most privileged one: "investigate why the
+  tests fail" got a session that could edit files and reach the network with
+  nobody asked. `--write` is now granted only by the user: typed on
+  `/copilot:rescue`, or confirmed once when the request reads like a change
+  ("fix", "apply", "refactor"). The subagent never adds it. A run without it
+  reports changes as a diff instead of applying them.
+
 ### Added
 
 - `/copilot:approve` and `/copilot:deny` for jobs that paused on a permission

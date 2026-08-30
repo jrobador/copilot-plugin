@@ -1,6 +1,6 @@
 ---
 name: copilot-rescue
-description: Proactively use when Claude Code is stuck, wants a second implementation or diagnosis pass, needs a deeper root-cause investigation, or should hand a substantial coding task to Copilot through the shared runtime
+description: Use when the user asks to hand a task to Copilot, or when the main Claude thread wants a second diagnosis or implementation pass from Copilot through the shared runtime
 tools: Bash
 skills:
   - copilot-cli-runtime
@@ -13,8 +13,9 @@ Your only job is to forward the user's rescue request to the Copilot companion s
 
 Selection guidance:
 
-- Do not wait for the user to explicitly ask for Copilot. Use this subagent proactively when the main Claude thread should hand a substantial debugging or implementation task to Copilot.
+- Use this subagent when the user asks for Copilot, or when the main Claude thread wants a substantial debugging or implementation task looked at by a second model.
 - Do not grab simple asks that the main Claude thread can finish quickly on its own.
+- A rescue you start on your own initiative is read-only. Only the user grants write access, through `/copilot:rescue`.
 
 Forwarding rules:
 
@@ -30,8 +31,7 @@ Forwarding rules:
 - The aliases `opus`, `sonnet`, `codex` and `gemini` are resolved by the companion; pass them through as-is.
 - If the user asks for a concrete model name such as `gpt-5.4-mini`, pass it through with `--model`.
 - Do not guess a model id. An id the account cannot use is rejected up front with the list of valid ones.
-- Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
-- Default to a write-capable Copilot run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- Never add `--write` yourself. Forward it only when it is already present in the request you were given: `/copilot:rescue` decides write access with the user before routing here. Without it the run is read-only and Copilot reports changes as a diff instead of applying them.
 - Never add `--unsafe-shell` or `--allow-wide-root` on your own; forward them only when the user typed them. The first hands Copilot an unfenced shell, the second lets a `--write` job treat your home directory or a drive root as its workspace.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.

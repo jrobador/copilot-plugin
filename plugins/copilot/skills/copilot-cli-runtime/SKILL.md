@@ -21,7 +21,7 @@ Execution rules:
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
 - Pass aliases (`opus`, `sonnet`, `codex`, `gemini`) through unchanged; the companion resolves them.
-- Default to a write-capable Copilot run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- Never add `--write` yourself. Forward it only when it is already in the request: `/copilot:rescue` settles write access with the user before routing. A run without it is read-only; Copilot reports the change as a diff.
 - Never add `--unsafe-shell` or `--allow-wide-root` on your own; forward them only when the user typed them. The first hands Copilot an unfenced shell, the second lets a `--write` job treat your home directory or a drive root as its workspace.
 
 Command selection:
@@ -29,6 +29,7 @@ Command selection:
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
 - If the forwarded request includes `--model`, pass it through to `task` verbatim.
 - If the forwarded request includes `--effort`, pass it through to `task`.
+- If the forwarded request includes `--write`, pass it through to `task` verbatim.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
@@ -42,7 +43,7 @@ Available models:
 - Aliases resolved by the companion: `opus`, `sonnet`, `codex`, `gemini`.
 
 Safety rules:
-- Default to write-capable Copilot work in `copilot:copilot-rescue` unless the user explicitly asks for read-only behavior.
+- Read-only unless `--write` was handed to you. Never escalate on your own.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Return the stdout of the `task` command exactly as-is.

@@ -12,11 +12,12 @@ the model that wrote it will not.
 |---|---|
 | `/copilot:review` | Read-only review of your uncommitted changes or your branch |
 | `/copilot:adversarial-review` | Steerable review that challenges the design, not just the code |
-| `/copilot:rescue` | Hand a task to Copilot: investigate, diagnose, or fix |
-| `/copilot:status` | Running and recent jobs for this repository |
+| `/copilot:rescue` | Hand a task to Copilot: investigate, diagnose, or fix (read-only unless you grant `--write`) |
+| `/copilot:status` | Running, paused and recent jobs for this repository |
 | `/copilot:result` | Final output of a finished job |
-| `/copilot:cancel` | Stop a background job |
-| `/copilot:setup` | Check readiness, list models, toggle the review gate |
+| `/copilot:approve` / `/copilot:deny` | Decide on a job that paused for your permission |
+| `/copilot:cancel` | Stop a background or paused job |
+| `/copilot:setup` | Install the runtime, check readiness, list models, toggle the review gate |
 
 Reviews and rescues can run in the background, so a long review does not block
 your session.
@@ -65,8 +66,6 @@ Being fixed in this release; until then:
 
 - **The review gate blocks the session end on any failure**, including a
   logged-out Copilot. If it loops, run `/copilot:setup --disable-review-gate`.
-- **Rescue asks Copilot to edit by default.** Say "read-only" in the request
-  to keep it from touching files.
 
 A first run:
 
@@ -115,6 +114,7 @@ Hands a task to Copilot through the `copilot:copilot-rescue` subagent.
 
 ```bash
 /copilot:rescue investigate why the tests started failing
+/copilot:rescue --write fix the flaky integration test
 /copilot:rescue --resume apply the top fix from the last run
 /copilot:rescue --model sonnet --effort high investigate the flaky integration test
 /copilot:rescue --background investigate the regression
@@ -123,10 +123,17 @@ Hands a task to Copilot through the `copilot:copilot-rescue` subagent.
 Or just ask in prose: *"Ask Copilot to redesign the database connection to be
 more resilient."*
 
-Rescue is the one command that can edit your files, and only when Copilot is
-given write access. It supports `--background`, `--wait`, `--resume` and
-`--fresh`; with neither `--resume` nor `--fresh`, the plugin offers to continue
-the latest rescue thread for the repository.
+Rescue is the one command that can edit your files, and only when you grant
+write access. A rescue is **read-only by default**: Copilot reads the
+repository, runs read-only commands, and reports any change it would make as
+a diff. Pass `--write` to let it apply changes, or `--read-only` to be
+explicit. When a request reads like a change ("fix", "apply", "refactor") and
+you passed neither, `/copilot:rescue` asks once before starting; a rescue that
+Claude starts on its own initiative is always read-only.
+
+It supports `--background`, `--wait`, `--resume` and `--fresh`; with neither
+`--resume` nor `--fresh`, the plugin offers to continue the latest rescue
+thread for the repository.
 
 ### `/copilot:status`, `/copilot:result`, `/copilot:cancel`
 
@@ -139,6 +146,30 @@ the latest rescue thread for the repository.
 
 `/copilot:result` includes the Copilot session id, so you can pick the work up
 directly in Copilot with `copilot --resume <session-id>`.
+
+### `/copilot:approve`, `/copilot:deny`
+
+A job can pause on a decision that should be yours. When the permission policy
+flags a request for the owner, the job stops with status `awaiting-approval`,
+keeps its Copilot session, and `/copilot:status` shows what it wants to do:
+
+```bash
+/copilot:status                 # "Awaiting your approval: read: secrets/.env"
+/copilot:approve task-abc123    # resume the same session with that request allowed
+/copilot:deny task-abc123       # close the job without granting it
+/copilot:cancel task-abc123     # abandon it without deciding
+```
+
+Approving resumes the paused Copilot session in the background and asks the
+model to carry out the request it was refused; the rest of the task continues
+from there. If the CLI has since pruned that session the job ends as
+`expired` and the original task has to be re-run. A paused job is never
+pruned from the job list while it waits.
+
+What pauses a job today is a sentinel filename, `ESCALATE_ME.txt`
+(override with the `COPILOT_ESCALATE_SENTINEL` environment variable); a
+classifier for secret-looking files is the planned follow-up. Everything the
+policy refuses outright is still refused, not escalated.
 
 ### `/copilot:setup`
 
@@ -179,9 +210,10 @@ models that support reasoning effort.
 ## Permissions
 
 Every privileged action Copilot attempts is decided by the plugin, not by the
-prompt.
+prompt. Write access is granted by you, per rescue, with `--write`; nothing
+else turns it on.
 
-**Read-only jobs** — both reviews, and any rescue without write access:
+**Read-only jobs** — both reviews, and any rescue without `--write`:
 
 | Request | Decision |
 |---|---|

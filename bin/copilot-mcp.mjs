@@ -23,7 +23,7 @@ import { ROOT_DIR } from "../lib/plugin-root.mjs";
 import { findTool, toolDefinitions } from "../lib/mcp/tools.mjs";
 
 const CLI = path.join(ROOT_DIR, "bin", "copilot-plugin.mjs");
-const SERVER_INFO = { name: "copilot-plugin", version: "0.2.0-dev" };
+const SERVER_INFO = { name: "copilot-plugin", version: "0.2.0" };
 // A rescue or review can take a while; the tool call blocks until the CLI exits.
 const CLI_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_OUTPUT_BYTES = 5 * 1024 * 1024;

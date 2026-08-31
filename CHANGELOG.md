@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.0 — 2026-08-30
+
+Host-neutral: the plugin now works in **Cursor** as well as Claude Code, off one
+shared runtime.
+
+### Added
+
+- **Cursor support over MCP.** `bin/copilot-mcp.mjs` is a stdio MCP server that
+  exposes the plugin's commands as `copilot_*` tools (review,
+  adversarial_review, rescue, status, result, approve, deny, cancel, setup).
+  No hosting: the editor spawns it on demand. `hosts/cursor/` carries the
+  `.cursor/mcp.json`, `hooks.json`, slash commands and rule; see
+  `hosts/cursor/install.md`. The stop-gate hook and session-lifecycle hook read
+  their input across both hosts' stdin shapes and, when blocking, emit both
+  Claude Code's `{decision}` and Cursor's `{permission}` at once.
+
+### Changed
+
+- **Restructured to a host-neutral layout and renamed to `copilot-plugin`.**
+  The runtime moved out of the Claude Code plugin subdirectory to the repo root
+  (`bin/`, `lib/`), the Claude Code adapter is under `hosts/claude-code/`, and
+  the repo root is now both the npm package and the marketplace source. One
+  `package.json`. The old internal name is gone from code, env vars
+  (`COPILOT_PLUGIN_SESSION_ID`, `COPILOT_PLUGIN_SDK_MODULE`), the fallback state
+  directory (`~/.copilot-plugin`) and identifiers. Behavior is unchanged; the
+  Claude Code commands (`/copilot:...`) and the installed-plugin flow work as
+  before.
+
 ## 0.1.1 — 2026-08-30
 
 Hardening release driven by an audit of 0.1.0. Nothing here changes what the

@@ -1,6 +1,6 @@
 {
   "name": "copilot",
-  "version": "0.2.0-dev",
+  "version": "0.2.0",
   "description": "Use Copilot from Claude Code to review code or delegate tasks.",
   "author": {
     "name": "Joaquin Robador",

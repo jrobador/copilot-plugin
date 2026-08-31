@@ -1,10 +1,16 @@
-# Copilot plugin for Claude Code
+# copilot-plugin
 
-Delegate code review and coding tasks from Claude Code to GitHub Copilot.
+Delegate code review and coding tasks to GitHub Copilot — from **Claude Code**
+or **Cursor**.
 
-Claude keeps driving the session; Copilot does the work you hand it and its
-output comes back verbatim. A second model reviewing your change catches things
-the model that wrote it will not.
+Your editor's agent keeps driving the session; Copilot does the work you hand it
+and its output comes back verbatim. A second model reviewing your change catches
+things the model that wrote it will not.
+
+One Node runtime, two front ends: Claude Code uses slash commands, Cursor uses
+MCP tools. Same reviews, same rescues, same approvals. The command reference
+below uses the Claude Code `/copilot:...` names; in Cursor the same capabilities
+are the `copilot_*` MCP tools — see [Cursor setup](hosts/cursor/install.md).
 
 ## What you get
 
@@ -278,19 +284,24 @@ tells you so instead of silently working around it.
 ## How it works
 
 ```
-Claude Code
-  └─ slash command (.md, mostly prompt)
-       └─ bin/copilot-plugin.mjs        one CLI: setup|review|task|status|result|cancel
-            ├─ lib/copilot-client.mjs          @github/copilot-sdk over JSON-RPC
-            │    ├─ lib/permissions.mjs        decides every permission request
-            │    └─ lib/run-command.mjs        the argv-only shell replacement
-            ├─ lib/git.mjs                     review targeting and diff collection
-            └─ lib/state.mjs                   per-workspace job records
+Claude Code slash command (.md)     Cursor MCP tool (copilot_*)
+        │                                    │
+        │                          bin/copilot-mcp.mjs   (stdio MCP server)
+        │                                    │
+        └────────────► bin/copilot-plugin.mjs ◄──────────┘
+                       one CLI: setup|review|task|status|result|approve|deny|cancel
+                            ├─ lib/copilot-client.mjs   @github/copilot-sdk over JSON-RPC
+                            │    ├─ lib/permissions.mjs  decides every permission request
+                            │    └─ lib/run-command.mjs  the argv-only shell replacement
+                            ├─ lib/git.mjs              review targeting and diff collection
+                            └─ lib/state.mjs            per-workspace job records
 ```
 
-The commands hold almost no logic: they decide foreground vs. background and
-return the plugin's stdout verbatim. Everything else is in the Node runtime,
-which is testable without Claude Code in the loop (`npm test`).
+Both hosts reach the same CLI. Claude Code's commands hold almost no logic; the
+Cursor MCP server (`bin/copilot-mcp.mjs`) spawns the CLI and returns its output.
+Everything else is in the Node runtime, testable without either host in the loop
+(`npm test`). The host adapters live under `hosts/claude-code/` and
+`hosts/cursor/`.
 
 Job state lives per workspace under `$CLAUDE_PLUGIN_DATA/state/`, keyed by a
 hash of the workspace path, capped at 50 jobs.
@@ -329,22 +340,28 @@ config, same checkout.
 No. Reviews run under a permission policy that refuses writes at the runtime
 level. Only `/copilot:rescue` with write access can change files.
 
+## Cursor
+
+See [hosts/cursor/install.md](hosts/cursor/install.md). In short: `npm install -g
+copilot-plugin`, add `{ "mcpServers": { "copilot": { "command": "copilot-mcp" } } }`
+to `.cursor/mcp.json`, reload. Optional: the slash commands, rule and stop-gate
+hooks under `hosts/cursor/`.
+
 ## Development
 
 ```bash
-npm install        # test and typecheck tooling
-npm run deps       # the Copilot runtime, into plugins/copilot/node_modules
+npm install        # runtime + MCP SDK + test/typecheck tooling
 npm test
 npm run typecheck
 ```
 
-The runtime lives in `plugins/copilot/package.json`, not the root one, because
-`plugins/copilot` is what the marketplace ships. Both the SDK and the CLI
-package are pinned there: they are released separately and have already
-drifted apart once (SDK 1.0.11 cannot start CLI 1.0.82). Bump them together
-and let `tests/installed-copy.test.mjs` prove the pair starts. The suite
-otherwise runs without the runtime, against `tests/fake-copilot-fixture.mjs`
-(`COPILOT_PLUGIN_SDK_MODULE`).
+The repo root is the npm package (`copilot-plugin`) and the Claude Code plugin
+source; `bin/` and `lib/` are the runtime, `hosts/` the per-editor adapters. Both
+the Copilot SDK and the CLI package are pinned in `package.json`: they release
+separately and have already drifted apart once (SDK 1.0.11 cannot start CLI
+1.0.82). Bump them together and let `tests/installed-copy.test.mjs` prove the
+pair starts. The suite otherwise runs without the runtime, against
+`tests/fake-copilot-fixture.mjs` (`COPILOT_PLUGIN_SDK_MODULE`).
 
 ## Credits
 

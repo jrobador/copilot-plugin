@@ -35,7 +35,7 @@ describe("runCommand", () => {
     assert.match(result.stdout, /hello/);
   });
 
-  // Audit H1 / task P0-1. On Windows every runCommand went through cmd.exe
+  // On Windows every runCommand went through cmd.exe
   // (`shell: true`), which re-parses the joined arguments: a git ref carrying
   // `&&` ran a second command. Refs come from the user (`--base`) and from the
   // remote (origin/HEAD), so this was an injection, not a quoting nit.
@@ -143,7 +143,7 @@ describe("terminateProcessTree", () => {
     assert.equal(result.delivered, false);
   });
 
-  // Audit M2 / task P1-2. A stored pid can be reused by anything; with an
+  // A stored pid can be reused by anything; with an
   // identity predicate the kill only proceeds when the command line matches.
   it("with an identity predicate, leaves a pid that belongs to something else alone", () => {
     const calls = [];

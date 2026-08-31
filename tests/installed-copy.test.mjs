@@ -11,7 +11,7 @@ const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_DIR = path.resolve(TESTS_DIR, "..");
 
 /**
- * Audit H2 / task P0-2. The marketplace copies the plugin source and nothing
+ * The marketplace copies the plugin source and nothing
  * else: no node_modules, and Node's resolution never reaches a sibling from
  * ~/.claude/plugins/cache. Every command in that copy failed with
  * "@github/copilot-sdk is not installed" and setup told the user to install a

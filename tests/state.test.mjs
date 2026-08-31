@@ -120,7 +120,7 @@ describe("state", () => {
     assert.ok(saved.jobs.length >= 50);
   });
 
-  // Audit M4 / task P1-1. A half-written or truncated state.json (three
+  // A half-written or truncated state.json (three
   // detached workers and the hooks all wrote it with a plain writeFileSync)
   // parsed as "no state", and the next upsert persisted that emptiness: every
   // other job record was silently dropped from the index.
@@ -147,7 +147,7 @@ describe("state", () => {
     );
   });
 
-  // Audit L6 / task P2-6. The records hold prompts, diffs and model output.
+  // The records hold prompts, diffs and model output.
   it("creates the state directory owner-only on POSIX", { skip: process.platform === "win32" }, () => {
     upsertJob(tempDir, { id: "perm-1", status: "completed" });
     const mode = fs.statSync(resolveStateDir(tempDir)).mode & 0o777;

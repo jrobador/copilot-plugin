@@ -93,7 +93,7 @@ describe("git", () => {
     fs.unlinkSync(path.join(tempDir, "review.txt"));
   });
 
-  // Audit H1 / task P0-1. Git accepts `|`, `&`, `;` and `$()` in ref names, and
+  // Git accepts `|`, `&`, `;` and `$()` in ref names, and
   // the default branch name comes from the remote. Refs are validated before
   // they are handed to any process.
   it("assertSafeRef rejects refs carrying shell metacharacters or looking like options", () => {
@@ -128,7 +128,7 @@ describe("git", () => {
     }
   });
 
-  // Audit M5 / task P1-5. The diff used to be pasted whole into the prompt;
+  // The diff used to be pasted whole into the prompt;
   // only untracked files had a size cap. A 1 MB change to a tracked file is
   // truncated with a marker instead of shipped verbatim.
   it("collectReviewContext caps the diff size and marks the truncation", () => {

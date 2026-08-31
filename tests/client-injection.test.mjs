@@ -90,7 +90,7 @@ describe("SDK injection through COPILOT_PLUGIN_SDK_MODULE", () => {
     assert.equal(strict.session, null);
   });
 
-  // Audit L2 / task P2-2. Clients were keyed by the exact cwd string, so a
+  // Clients were keyed by the exact cwd string, so a
   // review started in a subdirectory booted one CLI for the checks and another
   // for the session.
   it("shares one client across directories of the same repository", async () => {

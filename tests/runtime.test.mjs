@@ -31,7 +31,7 @@ describe("runtime: buildPersistentTaskSessionId", () => {
     assert.ok(id.length < 100);
   });
 
-  // Audit M6 / task P1-6. The id used to be a pure function of the first 56
+  // The id used to be a pure function of the first 56
   // characters of the prompt, so two runs of the same prompt (every stop-gate
   // review, every "continue") asked the CLI to create a session with an id
   // that already existed.

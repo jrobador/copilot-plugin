@@ -30,9 +30,8 @@ shared runtime.
 
 ## 0.1.1 — 2026-08-30
 
-Hardening release driven by an audit of 0.1.0. Nothing here changes what the
-commands do; it changes what can go wrong while they do it. Every finding the
-audit left open ships with a regression test.
+Hardening release. Nothing here changes what the commands do; it changes what
+can go wrong while they do it. Every fix ships with a regression test.
 
 ### Security
 
@@ -151,9 +150,9 @@ audit left open ships with a regression test.
 
 ### Tests
 
-- Regression tests for every open audit finding land first, marked `todo`
-  with the task that closes them, so the suite stays green while documenting
-  what is still broken: shell injection through git refs on Windows, the
+- Regression tests for every fix land first, so the suite stays green while
+  documenting what was still broken: shell injection through git refs on
+  Windows, the
   unbounded review diff, backslashes eaten by the argument tokenizer,
   colliding session ids, unprotected `.claude/`, a corrupt `state.json`
   wiping the job index, and stale "running" jobs.

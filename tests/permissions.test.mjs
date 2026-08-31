@@ -440,7 +440,7 @@ describe("decidePermission: read escalation", () => {
   });
 });
 
-// Audit L8 / task P1-4. `.claude/` holds settings.json, whose hooks run on the
+// `.claude/` holds settings.json, whose hooks run on the
 // user's behalf in the next Claude Code session: same class as .git/hooks.
 describe("decidePermission: .claude/ is a protected path", () => {
   it("refuses writes under .claude/ in both modes", () => {

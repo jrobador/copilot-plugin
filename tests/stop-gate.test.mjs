@@ -69,7 +69,7 @@ describe("stop gate: runStopReview", () => {
     assert.equal(decideStop(review), null);
   });
 
-  // Audit M3 / task P1-3. Every failure to *run* the review (Copilot logged
+  // Every failure to *run* the review (Copilot logged
   // out, rate limited, timed out, garbled output) used to block the stop,
   // which turned an infrastructure problem into a Claude/Copilot loop.
   for (const [label, spawnImpl] of [

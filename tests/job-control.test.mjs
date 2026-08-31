@@ -109,7 +109,7 @@ describe("job-control", () => {
     assert.ok(enriched.duration);
   });
 
-  // Audit M2 / task P1-2. A worker killed by OOM, `kill -9` or a reboot left
+  // A worker killed by OOM, `kill -9` or a reboot left
   // its job "running" forever; nothing checked whether the pid was alive, and
   // the stored pid was later handed to `taskkill /T /F`, which may by then
   // belong to an unrelated process.
@@ -142,7 +142,7 @@ describe("job-control", () => {
     assert.throws(() => resolveResultJob(tempDir, ""), /No finished/);
   });
 
-  // Audit L4 / task P2-4. A running job asked for by id used to be reported as
+  // A running job asked for by id used to be reported as
   // "no job found" because the search only looked at finished jobs.
   it("resolveResultJob explains an unfinished job asked for by id", () => {
     upsertJob(tempDir, { id: "res-running", status: "running", jobClass: "task" });

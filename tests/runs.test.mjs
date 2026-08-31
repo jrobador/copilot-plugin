@@ -133,7 +133,7 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
     assert.equal(listJobs(tempDir).find((entry) => entry.id === job.id).status, "completed");
   });
 
-  // Audit H3 / task P0-3. The previous task's *Claude* session id used to be
+  // The previous task's *Claude* session id used to be
   // handed to resumeSession as if it were the Copilot session id, so the
   // resume always failed and a fresh session started under Claude's id.
   it("--resume-last resumes the Copilot session of the previous task", async () => {
@@ -251,7 +251,7 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
     assert.equal(readStoredJob(tempDir, job.id).status, "expired");
   });
 
-  // Audit M1 / task P0-5. The detached worker used to be spawned before its
+  // The detached worker used to be spawned before its
   // job file was written; a fast worker found nothing and died silently,
   // leaving the job "queued" forever.
   it("enqueue: the job file exists before the task worker is spawned", () => {

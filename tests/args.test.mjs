@@ -73,7 +73,7 @@ describe("splitRawArgumentString", () => {
     assert.deepEqual(splitRawArgumentString(""), []);
   });
 
-  // Audit M7 / task P1-7. Every backslash used to be treated as an escape and
+  // Every backslash used to be treated as an escape and
   // dropped, so a Windows path in a prompt arrived mangled (`C:\a\b` -> `C:ab`).
   it("keeps backslashes that do not escape a quote, a space or another backslash", () => {
     assert.deepEqual(splitRawArgumentString("fix C:\\Users\\me\\app.js"), ["fix", "C:\\Users\\me\\app.js"]);
@@ -83,7 +83,7 @@ describe("splitRawArgumentString", () => {
   });
 });
 
-// Audit M7 / task P1-7. The plugin re-tokenizes argv only when it receives
+// The plugin re-tokenizes argv only when it receives
 // exactly one token, so `task "fix C:\x"` and `task --write "fix C:\x"` used to
 // parse the same prompt differently.
 describe("normalizeArgv", () => {

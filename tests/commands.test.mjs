@@ -62,7 +62,7 @@ describe("copilot-plugin CLI", () => {
     assert.match(result.stderr, /Unknown subcommand: nonexistent/);
   });
 
-  // Audit L1 / task P2-1. Any error whose text contained "auth" or "login" was
+  // Any error whose text contained "auth" or "login" was
   // rewritten into "Copilot authentication failed", including this one.
   it("reports an unknown subcommand as such even when its name contains 'auth'", () => {
     const result = run(["authors"]);

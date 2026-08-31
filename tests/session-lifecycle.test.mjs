@@ -8,7 +8,7 @@ import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
 import { listJobs, upsertJob, writeJobFile } from "../lib/state.mjs";
 import { cleanupSessionJobs } from "../bin/session-lifecycle-hook.mjs";
 
-// Audit L5 / task P2-5. SessionEnd used to delete every record of the session,
+// SessionEnd used to delete every record of the session,
 // results included, so /copilot:result after a restart found nothing, and a
 // job paused for approval lost the context it needed to resume.
 describe("SessionEnd cleanup", () => {

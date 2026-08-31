@@ -1,13 +1,31 @@
 {
   "name": "copilot-plugin",
   "version": "0.2.0",
-  "private": true,
   "type": "module",
   "description": "Delegate code review and coding tasks to GitHub Copilot from Claude Code or Cursor.",
+  "keywords": [
+    "copilot",
+    "github-copilot",
+    "claude-code",
+    "cursor",
+    "mcp",
+    "code-review"
+  ],
   "license": "Apache-2.0",
   "engines": {
     "node": ">=20.0.0"
   },
+  "files": [
+    "bin/",
+    "lib/",
+    "prompts/",
+    "schemas/",
+    "hosts/",
+    "hooks/",
+    ".claude-plugin/",
+    "NOTICE",
+    "CHANGELOG.md"
+  ],
   "bin": {
     "copilot-plugin": "bin/copilot-plugin.mjs",
     "copilot-mcp": "bin/copilot-mcp.mjs"

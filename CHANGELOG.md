@@ -12,7 +12,7 @@ Four defects found by two independent adversarial Copilot reviews. Three are per
 
 ### Changed
 
-- **Breaking for `--write` jobs that used git to reach past the workspace.** Write mode used to skip every git rule, and the `.git/**` protection never applied because those subcommands take refs and config keys, not paths. `--global` and `--system` are now refused for git in both modes, and a write job may not run `git push`, `git credential`, `git reset --hard` or `git clean -f/-d/-x`. Everything a job needs in the repository — add, commit, checkout, branch, stash, merge, rebase, `reset --soft` — still works.
+- **Breaking for `--write` jobs that used git to reach past the workspace.** Write mode used to skip every git rule, and the `.git/**` protection never applied because those subcommands take refs and config keys, not paths. `--global` and `--system` are now refused for git in both modes, and a write job may not run `git push`, `git credential`, `git config`, `git reset --hard` or `git clean -f/-d/-x`. `git config` is denied because `git config alias.x '!sh -c ...'` followed by `git x` composes two allowed commands into arbitrary shell execution, and the repository's own config is inside the workspace. Everything a job needs in the repository — add, commit, checkout, branch, stash, merge, rebase, `reset --soft` — still works.
 
 ## 0.2.1 — 2026-08-31
 

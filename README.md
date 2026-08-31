@@ -180,7 +180,7 @@ Every privileged action Copilot attempts is decided by the plugin, not by the pr
 
 A `--write` job is also refused when its workspace root is your home directory, an ancestor of it, or a drive root, because "inside the workspace" would then mean everything you own. Pass `--allow-wide-root` if you really mean it.
 
-`git` is fenced beyond the path rules, because its arguments are refs and config keys rather than paths. `--global` and `--system` are refused in both modes, and a `--write` job may not run `git push`, `git credential`, `git reset --hard` or `git clean -f`: it can do its work in the repository, but not publish it, read your credential helper, or throw away changes you never handed it.
+`git` is fenced beyond the path rules, because its arguments are refs and config keys rather than paths. `--global` and `--system` are refused in both modes, and a `--write` job may not run `git push`, `git credential`, `git config`, `git reset --hard` or `git clean -f`: it can do its work in the repository, but not publish it, read your credential helper, or throw away changes you never handed it.
 
 ### Shell
 

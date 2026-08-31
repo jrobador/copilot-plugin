@@ -213,6 +213,13 @@ describe("planCommand: git", () => {
     assert.match(refused("git", ["clean", "-x", "--force"]), /discards work/);
   });
 
+  // Two allowed commands used to compose into arbitrary shell execution:
+  // `git config alias.x '!sh -c ...'` then `git x`.
+  it("refuses git config in write mode, alias or not", () => {
+    assert.match(refused("git", ["config", "alias.pwn", "!sh -c 'id'"]), /shell alias/);
+    assert.match(refused("git", ["config", "user.email", "x@y.z"]), /shell alias/);
+  });
+
   it("refuses git config outside the repository in either mode", () => {
     for (const mode of [READ_ONLY, WORKSPACE_WRITE]) {
       assert.match(refused("git", ["config", "--global", "alias.x", "!sh"], mode), /not allowed for git|not available/);

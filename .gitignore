@@ -4,3 +4,6 @@ node_modules/
 # scratch
 *.log
 .DS_Store
+
+# npm auth (token) — nunca versionar
+.npmrc

@@ -254,6 +254,5 @@ The repo root is the npm package (`copilot-plugin`) and the Claude Code plugin s
 This project is a derivative work, Apache-2.0 throughout:
 
 - [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc) — the original Codex plugin whose structure this follows.
-- [wagnersza/copilot-plugin-cc](https://github.com/wagnersza/copilot-plugin-cc) — the first port to Copilot, which this was seeded from.
 
 See [NOTICE](NOTICE) for the full attribution chain. Not affiliated with GitHub, Microsoft, OpenAI, or Anthropic.

@@ -10,7 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
 import { createServer } from "../bin/copilot-mcp.mjs";
-import { TOOLS } from "../lib/mcp/tools.mjs";
+import { ALLOW_WRITE_ENV, TOOLS } from "../lib/mcp/tools.mjs";
 import { SDK_MODULE_ENV } from "../lib/copilot-client.mjs";
 
 const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fake-copilot-fixture.mjs");
@@ -108,5 +108,26 @@ describe("MCP server", () => {
     assert.equal(res.isError, true);
     const text = res.content.map((c) => c.text).join("\n");
     assert.match(text, /No .*job|not found/i);
+  });
+  // Claude Code's rescue command may not add these flags unless the user typed
+  // them. MCP has no user-typed channel, so the model must not reach them.
+  it("keeps the escalation flags out of the rescue tool's reach", () => {
+    const rescue = TOOLS.find((tool) => tool.name === "copilot_rescue");
+    const properties = rescue.inputSchema.properties;
+    assert.equal(properties.unsafe_shell, undefined);
+    assert.equal(properties.allow_wide_root, undefined);
+    const argv = rescue.toArgv({ prompt: "x", unsafe_shell: true, allow_wide_root: true, write: true });
+    assert.ok(!argv.includes("--unsafe-shell"));
+    assert.ok(!argv.includes("--allow-wide-root"));
+  });
+
+  it("refuses a write rescue unless the owner enabled it in the server environment", async () => {
+    const res = await client.callTool({ name: "copilot_rescue", arguments: { path: repo, prompt: "fix it", write: true } });
+    assert.equal(res.isError, true);
+    assert.match(res.content.map((c) => c.text).join("\n"), new RegExp(ALLOW_WRITE_ENV));
+
+    const rescue = TOOLS.find((tool) => tool.name === "copilot_rescue");
+    assert.equal(rescue.guard({ write: true }, { [ALLOW_WRITE_ENV]: "1" }), null);
+    assert.equal(rescue.guard({ write: false }, {}), null);
   });
 });

@@ -180,6 +180,8 @@ Every privileged action Copilot attempts is decided by the plugin, not by the pr
 
 A `--write` job is also refused when its workspace root is your home directory, an ancestor of it, or a drive root, because "inside the workspace" would then mean everything you own. Pass `--allow-wide-root` if you really mean it.
 
+`git` is fenced beyond the path rules, because its arguments are refs and config keys rather than paths. `--global` and `--system` are refused in both modes, and a `--write` job may not run `git push`, `git credential`, `git reset --hard` or `git clean -f`: it can do its work in the repository, but not publish it, read your credential helper, or throw away changes you never handed it.
+
 ### Shell
 
 Copilot's runtime ships shell tools (`bash` on Unix, `powershell` on Windows, plus their read/write/stop/list helpers). They hand the model an interpreter, and an interpreter cannot be fenced by reading its input: bash and PowerShell are different languages, and on Windows the runtime does not even try to extract paths from PowerShell. So every session removes those tools and registers `run_command` instead.
@@ -238,6 +240,8 @@ Jobs belong to the Claude Code session that started them. `/copilot:status` and 
 ## Cursor
 
 See [hosts/cursor/install.md](hosts/cursor/install.md). In short: `npm install -g copilot-plugin`, add `{ "mcpServers": { "copilot": { "command": "copilot-mcp" } } }` to `.cursor/mcp.json`, reload. Optional: the slash commands, rule and stop-gate hooks under `hosts/cursor/`.
+
+Over MCP the tool arguments come from the model, not from you, so `copilot_rescue` is read-only until you say otherwise: `write: true` is refused unless the server's own environment carries `COPILOT_MCP_ALLOW_WRITE=1`, which only you can put in `mcp.json`. `--unsafe-shell` and `--allow-wide-root` are not exposed over MCP at all; they stay on the CLI, where a person types them.
 
 ## Development
 

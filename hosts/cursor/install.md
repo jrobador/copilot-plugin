@@ -32,6 +32,16 @@ For a clone instead of a global install, use:
 
 Reload Cursor. The `copilot_*` tools (review, rescue, status, result, approve, deny, cancel, setup) appear; Cursor asks before running a tool by default.
 
+### Letting a rescue write
+
+`copilot_rescue` is read-only over MCP: it reports the change it would make as a diff. Cursor confirms the tool call, but the arguments inside it come from the model, so `write: true` on its own is refused. The opt-in lives in the server's environment, which only you edit:
+
+```json
+{ "mcpServers": { "copilot": { "command": "copilot-mcp", "env": { "COPILOT_MCP_ALLOW_WRITE": "1" } } } }
+```
+
+`--unsafe-shell` and `--allow-wide-root` are not exposed over MCP at all. Run `copilot-plugin task` in a terminal if you need them.
+
 ## 3. (Optional) Commands and the rule
 
 - Copy `commands/*.md` into `.cursor/commands/` for `/copilot-review`, `/copilot-rescue`, … slash commands.

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Four defects found by two independent adversarial Copilot reviews. Three are permission-fence gaps: the fence was there, but the paths that actually run went around it.
+
+### Fixed
+
+- **A concurrent save could delete a job that was still running.** `saveState` reloaded the index and deleted the job file and log of anything missing from the *caller's* in-memory list, so a worker holding a stale snapshot erased a job another process had just enqueued — revive payload included — even though pruning claims to protect queued, running and awaiting-approval jobs. State updates now run under a cross-process lock, and the deletion set comes from the caller's own list, so a job the writer never saw can no longer be deleted.
+- **Untracked symlinks leaked files from outside the repository into review prompts.** Working-tree reviews inlined untracked files with `statSync`/`readFileSync`, which follow symlinks: an untracked `.env` linked to a file under your home directory went into the prompt sent to the model provider. Untracked entries are now `lstat`ed, and anything that is not a regular file is reported as skipped, never read.
+- **MCP could not tell you apart from the model.** `copilot_rescue` exposed `write`, `unsafe_shell` and `allow_wide_root` as ordinary schema booleans, so one approved tool call could start an unfenced shell with home-directory write scope. The two escalation flags are gone from the MCP schema — they stay on the CLI, where a person types them — and `write: true` is refused unless `COPILOT_MCP_ALLOW_WRITE=1` is set in the server's own environment, which only the repository owner edits.
+
+### Changed
+
+- **Breaking for `--write` jobs that used git to reach past the workspace.** Write mode used to skip every git rule, and the `.git/**` protection never applied because those subcommands take refs and config keys, not paths. `--global` and `--system` are now refused for git in both modes, and a write job may not run `git push`, `git credential`, `git reset --hard` or `git clean -f/-d/-x`. Everything a job needs in the repository — add, commit, checkout, branch, stash, merge, rebase, `reset --soft` — still works.
+
 ## 0.2.1 — 2026-08-31
 
 ### Fixed

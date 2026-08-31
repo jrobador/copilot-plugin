@@ -97,7 +97,8 @@ function resolveToolCwd(args) {
 
 /**
  * Build the configured MCP server. Exported so tests can connect a client over
- * an in-memory transport. `seams.spawnImpl` lets a test intercept the CLI.
+ * an in-memory transport. `seams.spawnImpl` lets a test intercept the CLI, and
+ * `seams.env` the environment a tool's guard is checked against.
  */
 export function createServer(seams = {}) {
   const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
@@ -110,6 +111,10 @@ export function createServer(seams = {}) {
       return { isError: true, content: [{ type: "text", text: `Unknown tool: ${request.params.name}` }] };
     }
     const args = request.params.arguments ?? {};
+    const refusal = tool.guard?.(args, seams.env ?? process.env);
+    if (refusal) {
+      return { isError: true, content: [{ type: "text", text: refusal }] };
+    }
     const result = await runCli(tool.toArgv(args), resolveToolCwd(args), seams);
     return { isError: !result.ok, content: [{ type: "text", text: result.text }] };
   });

@@ -163,4 +163,26 @@ describe("git", () => {
       assert.match(result, new RegExp(`diff --git a/f${index}\\.js`), "every file is still named");
     }
   });
+  // An untracked symlink used to be read through: `git ls-files --others`
+  // lists it, and statSync/readFileSync follow it wherever it points.
+  it("never reads an untracked symlink's target into the review context", () => {
+    const outside = path.join(tempDir, "..", `outside-secret-${process.pid}.txt`);
+    fs.writeFileSync(outside, "SENTINEL_SECRET_VALUE\n");
+    const link = path.join(tempDir, "leak.env");
+    try {
+      fs.symlinkSync(outside, link, "file");
+    } catch {
+      fs.rmSync(outside, { force: true });
+      return; // Windows without symlink privileges: nothing to test.
+    }
+    try {
+      const target = resolveReviewTarget(tempDir, { scope: "working-tree" });
+      const context = collectReviewContext(tempDir, target);
+      assert.doesNotMatch(context.content, /SENTINEL_SECRET_VALUE/, "the link target is never read");
+      assert.match(context.content, /leak\.env\n\(skipped: symlink\)/, "the entry is still reported");
+    } finally {
+      fs.rmSync(link, { force: true });
+      fs.rmSync(outside, { force: true });
+    }
+  });
 });

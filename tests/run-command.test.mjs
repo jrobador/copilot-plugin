@@ -194,10 +194,30 @@ describe("planCommand: git", () => {
     }
   });
 
-  it("allows any subcommand in write mode", () => {
+  it("allows the ordinary write subcommands in write mode", () => {
     assert.ok(allowed("git", ["commit", "-m", "x"]));
     assert.ok(allowed("git", ["checkout", "-b", "feature"]));
     assert.ok(allowed("git", ["log", "--output=out.txt"]));
+    assert.ok(allowed("git", ["add", "src/a.js"]));
+    assert.ok(allowed("git", ["stash"]));
+    assert.ok(allowed("git", ["reset", "--soft", "HEAD~1"]));
+  });
+
+  // These take refs and config keys, not paths, so the workspace containment
+  // check never saw them: write mode used to skip every git rule.
+  it("refuses git operations that leave the workspace or destroy work in write mode", () => {
+    assert.match(refused("git", ["push", "--force"]), /publishes outside the workspace/);
+    assert.match(refused("git", ["credential", "fill"]), /prints stored credentials/);
+    assert.match(refused("git", ["reset", "--hard", "HEAD~1"]), /discards work/);
+    assert.match(refused("git", ["clean", "-fd"]), /discards work/);
+    assert.match(refused("git", ["clean", "-x", "--force"]), /discards work/);
+  });
+
+  it("refuses git config outside the repository in either mode", () => {
+    for (const mode of [READ_ONLY, WORKSPACE_WRITE]) {
+      assert.match(refused("git", ["config", "--global", "alias.x", "!sh"], mode), /not allowed for git|not available/);
+      assert.match(refused("git", ["config", "--system", "core.pager", "sh"], mode), /not allowed for git|not available/);
+    }
   });
 });
 

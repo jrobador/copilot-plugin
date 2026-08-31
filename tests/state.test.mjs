@@ -2,7 +2,7 @@ import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 
 import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
 import {
@@ -171,5 +171,57 @@ describe("state", () => {
     const saved = saveState(tempDir, state);
     assert.ok(saved.jobs.some((j) => j.id === "queued-1"));
     assert.ok(saved.jobs.some((j) => j.id === "running-1"));
+  });
+  // The bug this pins: saveState used to diff the caller's in-memory jobs
+  // against a freshly loaded index and delete everything missing from the
+  // caller's copy -- including a job another process had just enqueued.
+  it("never deletes a job the saving writer never saw", () => {
+    upsertJob(tempDir, { id: "stale-a", status: "running" });
+    const staleView = loadState(tempDir);
+
+    const bFile = writeJobFile(tempDir, "stale-b", { id: "stale-b", request: { prompt: "revive me" } });
+    const bLog = resolveJobLogFile(tempDir, "stale-b");
+    fs.writeFileSync(bLog, "progress\n");
+    upsertJob(tempDir, { id: "stale-b", status: "queued", logFile: bLog });
+
+    saveState(tempDir, staleView);
+
+    assert.ok(fs.existsSync(bFile), "the concurrent job's file survives");
+    assert.ok(fs.existsSync(bLog), "the concurrent job's log survives");
+  });
+
+  it("serializes writers in separate processes", async () => {
+    const workspace = createTempWorkspace();
+    const stateUrl = new URL("../lib/state.mjs", import.meta.url).href;
+    const writer = path.join(workspace, "writer.mjs");
+    fs.writeFileSync(
+      writer,
+      [
+        `import { upsertJob } from ${JSON.stringify(stateUrl)};`,
+        "const [cwd, prefix, count] = process.argv.slice(2);",
+        "for (let i = 0; i < Number(count); i += 1) {",
+        "  upsertJob(cwd, { id: `${prefix}-${i}`, status: 'completed' });",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const run = (prefix) =>
+      new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [writer, workspace, prefix, "10"], {
+          env: { ...process.env, CLAUDE_PLUGIN_DATA: process.env.CLAUDE_PLUGIN_DATA }
+        });
+        child.on("error", reject);
+        child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`writer ${prefix} exited ${code}`))));
+      });
+
+    await Promise.all([run("left"), run("right")]);
+
+    const ids = new Set(listJobs(workspace).map((job) => job.id));
+    for (let i = 0; i < 10; i += 1) {
+      assert.ok(ids.has(`left-${i}`), `left-${i} survived`);
+      assert.ok(ids.has(`right-${i}`), `right-${i} survived`);
+    }
+    cleanupDir(workspace);
   });
 });

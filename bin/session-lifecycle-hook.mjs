@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-import { loadState, resolveStateFile, saveState } from "../lib/state.mjs";
+import { resolveStateFile, updateState } from "../lib/state.mjs";
 import { terminateWorker } from "../lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "../lib/workspace.mjs";
 
@@ -49,31 +49,30 @@ export function cleanupSessionJobs(cwd, sessionId, seams = {}) {
     const stateFile = resolveStateFile(workspaceRoot);
     if (!fs.existsSync(stateFile)) return { stopped };
 
-    const state = loadState(workspaceRoot);
     const completedAt = new Date().toISOString();
-    const jobs = state.jobs.map((job) => {
-      if (job.sessionId !== sessionId || !(job.status === "queued" || job.status === "running")) {
-        return job;
-      }
-      try {
-        terminate(job.pid);
-      } catch {
-        // Best effort.
-      }
-      stopped.push(job.id);
-      return {
-        ...job,
-        status: "cancelled",
-        phase: "cancelled",
-        pid: null,
-        completedAt,
-        errorMessage: "Cancelled: the Claude session that started it ended."
-      };
+    // Under the state lock: this hook runs while the workers it is cancelling
+    // are still writing their own progress.
+    updateState(workspaceRoot, (state) => {
+      state.jobs = state.jobs.map((job) => {
+        if (job.sessionId !== sessionId || !(job.status === "queued" || job.status === "running")) {
+          return job;
+        }
+        try {
+          terminate(job.pid);
+        } catch {
+          // Best effort.
+        }
+        stopped.push(job.id);
+        return {
+          ...job,
+          status: "cancelled",
+          phase: "cancelled",
+          pid: null,
+          completedAt,
+          errorMessage: "Cancelled: the Claude session that started it ended."
+        };
+      });
     });
-
-    if (stopped.length > 0) {
-      saveState(workspaceRoot, { ...state, jobs });
-    }
   } catch {
     // Best-effort cleanup
   }

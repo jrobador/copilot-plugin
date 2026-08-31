@@ -18,6 +18,7 @@ describe("renderSetupReport", () => {
       npm: { detail: "10.0.0" },
       copilot: { detail: "1.0.0" },
       auth: { detail: "authenticated" },
+      models: ["opus", "sonnet", "gpt-5.4"],
       sessionRuntime: { label: "direct startup" },
       reviewGateEnabled: false,
       actionsTaken: [],
@@ -25,7 +26,24 @@ describe("renderSetupReport", () => {
     });
     assert.match(output, /Copilot Setup/);
     assert.match(output, /ready/);
+    assert.match(output, /models \(3\): opus, sonnet, gpt-5\.4/);
     assert.match(output, /allowed programs \(--write jobs\): defaults only/);
+  });
+
+  it("shows no models when the account is not signed in", () => {
+    const output = renderSetupReport({
+      ready: false,
+      node: { detail: "v22" },
+      npm: { detail: "10" },
+      copilot: { detail: "x" },
+      auth: { detail: "not authenticated" },
+      models: [],
+      sessionRuntime: { label: "SDK managed" },
+      reviewGateEnabled: false,
+      actionsTaken: [],
+      nextSteps: []
+    });
+    assert.match(output, /models \(0\): none/);
   });
 
   it("lists extra programs allowed for run_command", () => {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-08-31
+
+### Fixed
+
+- The Claude Code plugin did not load after the 0.2.0 restructure: commands, agents and skills moved under `hosts/claude-code/`, but a plugin only auto-discovers `commands/`, `agents/` and `skills/` at its root, so every `/copilot:` command was unknown. `plugin.json` now declares their paths and leaves the root `hooks/hooks.json` to load on its own.
+- `/copilot:setup` now runs and shows the status report — Node, npm, runtime, Copilot CLI, auth, the account's models, the review gate — instead of printing its own instructions, and only offers to install the runtime when it is actually missing.
+
 ## 0.2.0 — 2026-08-30
 
 Host-neutral: the plugin now works in **Cursor** as well as Claude Code, off one

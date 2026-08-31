@@ -1,11 +1,26 @@
 {
   "name": "copilot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Use Copilot from Claude Code to review code or delegate tasks.",
   "author": {
     "name": "Joaquin Robador",
     "url": "https://github.com/jrobador"
   },
   "homepage": "https://github.com/jrobador/copilot-plugin",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "commands": [
+    "./hosts/claude-code/commands/review.md",
+    "./hosts/claude-code/commands/adversarial-review.md",
+    "./hosts/claude-code/commands/rescue.md",
+    "./hosts/claude-code/commands/status.md",
+    "./hosts/claude-code/commands/result.md",
+    "./hosts/claude-code/commands/approve.md",
+    "./hosts/claude-code/commands/deny.md",
+    "./hosts/claude-code/commands/cancel.md",
+    "./hosts/claude-code/commands/setup.md"
+  ],
+  "agents": [
+    "./hosts/claude-code/agents/copilot-rescue.md"
+  ],
+  "skills": "./hosts/claude-code/skills/"
 }

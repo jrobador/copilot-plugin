@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Delegate code review and coding tasks to GitHub Copilot from Claude Code or Cursor.",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "plugins": [
     {
       "name": "copilot",
       "description": "Use Copilot from Claude Code to review code or delegate tasks.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": {
         "name": "Joaquin Robador",
         "url": "https://github.com/jrobador"

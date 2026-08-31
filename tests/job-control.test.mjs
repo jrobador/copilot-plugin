@@ -5,20 +5,20 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 
 import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
-import { generateJobId, upsertJob } from "../plugins/copilot/scripts/lib/state.mjs";
+import { generateJobId, upsertJob } from "../lib/state.mjs";
 import {
   appendLogLine,
   createJobLogFile,
   createJobRecord,
   SESSION_ID_ENV
-} from "../plugins/copilot/scripts/lib/tracked-jobs.mjs";
+} from "../lib/tracked-jobs.mjs";
 import {
   enrichJob,
   readJobProgressPreview,
   sortJobsNewestFirst,
   resolveResultJob,
   resolveCancelableJob
-} from "../plugins/copilot/scripts/lib/job-control.mjs";
+} from "../lib/job-control.mjs";
 
 describe("tracked-jobs", () => {
   let tempDir;
@@ -41,13 +41,13 @@ describe("tracked-jobs", () => {
     cleanupDir(tempDir);
   });
 
-  it("SESSION_ID_ENV is COPILOT_COMPANION_SESSION_ID", () => {
-    assert.equal(SESSION_ID_ENV, "COPILOT_COMPANION_SESSION_ID");
+  it("SESSION_ID_ENV is COPILOT_PLUGIN_SESSION_ID", () => {
+    assert.equal(SESSION_ID_ENV, "COPILOT_PLUGIN_SESSION_ID");
   });
 
   it("createJobRecord sets sessionId from env", () => {
     const record = createJobRecord({ id: "test" }, {
-      env: { COPILOT_COMPANION_SESSION_ID: "sess-123" }
+      env: { COPILOT_PLUGIN_SESSION_ID: "sess-123" }
     });
     assert.equal(record.sessionId, "sess-123");
   });

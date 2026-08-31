@@ -13,7 +13,7 @@ import {
   READ_ONLY,
   runPrompt,
   WORKSPACE_WRITE
-} from "../plugins/copilot/scripts/lib/copilot-client.mjs";
+} from "../lib/copilot-client.mjs";
 import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
 
 // We test the module's exported functions by mocking the SDK.

@@ -1,23 +1,23 @@
 {
-  "name": "copilot-plugin-cc",
+  "name": "copilot-plugin",
   "owner": {
     "name": "Joaquin Robador",
     "url": "https://github.com/jrobador"
   },
   "metadata": {
-    "description": "Delegate code review and coding tasks from Claude Code to GitHub Copilot.",
-    "version": "0.1.1"
+    "description": "Delegate code review and coding tasks to GitHub Copilot from Claude Code or Cursor.",
+    "version": "0.2.0-dev"
   },
   "plugins": [
     {
       "name": "copilot",
       "description": "Use Copilot from Claude Code to review code or delegate tasks.",
-      "version": "0.1.1",
+      "version": "0.2.0-dev",
       "author": {
         "name": "Joaquin Robador",
         "url": "https://github.com/jrobador"
       },
-      "source": "./plugins/copilot"
+      "source": "."
     }
   ]
 }

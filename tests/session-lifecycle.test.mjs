@@ -5,8 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
-import { listJobs, upsertJob, writeJobFile } from "../plugins/copilot/scripts/lib/state.mjs";
-import { cleanupSessionJobs } from "../plugins/copilot/scripts/session-lifecycle-hook.mjs";
+import { listJobs, upsertJob, writeJobFile } from "../lib/state.mjs";
+import { cleanupSessionJobs } from "../bin/session-lifecycle-hook.mjs";
 
 // Audit L5 / task P2-5. SessionEnd used to delete every record of the session,
 // results included, so /copilot:result after a restart found nothing, and a

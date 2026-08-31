@@ -70,7 +70,7 @@ audit left open ships with a regression test.
   never kills a stranger.** `/copilot:status` checks whether the pid behind
   an active job is alive and shows `stale` when it is not; `/copilot:cancel`
   and the SessionEnd cleanup read the target's command line first and only
-  kill a companion process, so a pid the OS has since handed to something
+  kill a plugin process, so a pid the OS has since handed to something
   else is left alone.
 - **Ending a Claude session keeps the results.** SessionEnd used to delete
   every job record of the session, results included. It now stops that
@@ -80,7 +80,7 @@ audit left open ships with a regression test.
 - One Copilot CLI per repository: clients are keyed by the canonical git root,
   so a review started in a subdirectory no longer boots a second CLI for its
   checks.
-- Job records default to `~/.copilot-companion` instead of the shared temp
+- Job records default to `~/.copilot-plugin` instead of the shared temp
   directory when Claude Code provides no data directory, and the directory is
   created owner-only on POSIX.
 - The job log records what each run cost and did: mode, model, prompt size,
@@ -193,7 +193,7 @@ at `4837b0b`, itself a port of OpenAI's Codex plugin for Claude Code.
   the login check returned a hardcoded `loggedIn: true` with the detail
   "assumed authenticated". It now asks the SDK.
 - Every command hung forever once it touched the runtime: the SDK's CLI child
-  process kept the companion alive because nothing shut it down.
+  process kept the plugin alive because nothing shut it down.
 - Reviews died at 60 seconds with "Timeout waiting for session.idle" — the
   SDK's default. The timeout does not abort the agent, so short ones stranded
   work that was still running. Now 30 minutes.

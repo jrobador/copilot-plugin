@@ -5,14 +5,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
-import { getConfig, setConfig } from "../plugins/copilot/scripts/lib/state.mjs";
+import { getConfig, setConfig } from "../lib/state.mjs";
 import {
   applyBlockBudget,
   decideStop,
   GATE_MAX_CONSECUTIVE_BLOCKS,
   parseStopReviewOutput,
   runStopReview
-} from "../plugins/copilot/scripts/stop-review-gate-hook.mjs";
+} from "../bin/stop-review-gate-hook.mjs";
 
 const child = (overrides = {}) => ({ status: 0, stdout: "", stderr: "", error: undefined, ...overrides });
 const answering = (rawOutput) => () => child({ stdout: JSON.stringify({ rawOutput }) });
@@ -50,7 +50,7 @@ describe("stop gate: runStopReview", () => {
     assert.equal(seen.args[1], "task");
     assert.match(seen.args[3], /Run a stop-gate review of the previous Claude turn/);
     assert.match(seen.args[3], /I edited foo\.js/);
-    assert.equal(seen.options.env.COPILOT_COMPANION_SESSION_ID, "s-1");
+    assert.equal(seen.options.env.COPILOT_PLUGIN_SESSION_ID, "s-1");
   });
 
   it("blocks on an explicit BLOCK verdict", () => {

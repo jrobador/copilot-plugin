@@ -1,23 +1,29 @@
 {
-  "name": "copilot-plugin-cc",
-  "version": "0.1.1",
+  "name": "copilot-plugin",
+  "version": "0.2.0-dev",
   "private": true,
   "type": "module",
-  "description": "Delegate code review and coding tasks from Claude Code to GitHub Copilot.",
+  "description": "Delegate code review and coding tasks to GitHub Copilot from Claude Code or Cursor.",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=20.0.0"
   },
+  "bin": {
+    "copilot-plugin": "bin/copilot-plugin.mjs"
+  },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "test:watch": "node --test --watch tests/*.test.mjs",
-    "typecheck": "tsc -p jsconfig.json",
-    "deps": "cd plugins/copilot && npm ci"
+    "typecheck": "tsc -p jsconfig.json"
+  },
+  "optionalDependencies": {
+    "@github/copilot-sdk": "1.0.11",
+    "@github/copilot": "1.0.80"
   },
   "author": "Joaquin Robador <jrobador37@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jrobador/copilot-plugin-cc.git"
+    "url": "git+https://github.com/jrobador/copilot-plugin.git"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

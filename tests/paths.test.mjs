@@ -10,7 +10,7 @@ import {
   createWorkspacePolicy,
   isInsideWorkspace,
   isWideRoot
-} from "../plugins/copilot/scripts/lib/paths.mjs";
+} from "../lib/paths.mjs";
 import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
 
 const IS_WINDOWS = process.platform === "win32";
@@ -226,7 +226,7 @@ describe("isInsideWorkspace", () => {
 describe("canonicalizePath", () => {
   it("returns the input joined with the missing tail when nothing exists", () => {
     const root = path.parse(process.cwd()).root;
-    const ghost = path.join(root, "definitely-missing-copilot-plugin-cc", "a", "b.txt");
+    const ghost = path.join(root, "definitely-missing-copilot-plugin", "a", "b.txt");
     assert.equal(canonicalizePath(ghost), ghost);
   });
 });

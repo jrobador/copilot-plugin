@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
 
 const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
-const SCRIPT = path.resolve(TESTS_DIR, "..", "plugins", "copilot", "scripts", "copilot-companion.mjs");
+const SCRIPT = path.resolve(TESTS_DIR, "..", "bin", "copilot-plugin.mjs");
 const FIXTURE = path.resolve(TESTS_DIR, "fake-copilot-fixture.mjs");
 
 /**
@@ -16,7 +16,7 @@ const FIXTURE = path.resolve(TESTS_DIR, "fake-copilot-fixture.mjs");
  * its own state directory, and the fake SDK standing in for Copilot. Every
  * assertion here is on concrete output; a crash is a failure, not "acceptable".
  */
-describe("copilot-companion CLI", () => {
+describe("copilot-plugin CLI", () => {
   let repo;
   let env;
 
@@ -40,8 +40,8 @@ describe("copilot-companion CLI", () => {
     env = {
       ...process.env,
       CLAUDE_PLUGIN_DATA: path.join(repo, ".plugin-data"),
-      COPILOT_COMPANION_SDK_MODULE: FIXTURE,
-      COPILOT_COMPANION_SESSION_ID: "cli-test-session"
+      COPILOT_PLUGIN_SDK_MODULE: FIXTURE,
+      COPILOT_PLUGIN_SESSION_ID: "cli-test-session"
     };
   });
 
@@ -52,7 +52,7 @@ describe("copilot-companion CLI", () => {
       const result = run([flag]);
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /^Usage:/);
-      assert.match(result.stdout, /copilot-companion\.mjs setup/);
+      assert.match(result.stdout, /copilot-plugin\.mjs setup/);
     }
   });
 
@@ -111,7 +111,7 @@ describe("copilot-companion CLI", () => {
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.rawOutput, "Hello from the fake.");
-    assert.ok(payload.sessionId.startsWith("copilot-companion-task"));
+    assert.ok(payload.sessionId.startsWith("copilot-plugin-task"));
 
     const status = run(["status", "--json"]);
     const report = JSON.parse(status.stdout);

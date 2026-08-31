@@ -16,7 +16,7 @@ import {
   getWorkingTreeState,
   resolveReviewTarget,
   collectReviewContext
-} from "../plugins/copilot/scripts/lib/git.mjs";
+} from "../lib/git.mjs";
 
 describe("git", () => {
   let tempDir;

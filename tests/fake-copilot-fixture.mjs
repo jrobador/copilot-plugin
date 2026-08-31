@@ -5,8 +5,8 @@
  *
  * 1. In-process: construct FakeCopilotClient / FakeCopilotSession directly and
  *    script them with setSessionConfig(), as the unit tests do.
- * 2. As the SDK itself: point COPILOT_COMPANION_SDK_MODULE at this file and the
- *    companion's loadSdk() imports it instead of the real package, so the whole
+ * 2. As the SDK itself: point COPILOT_PLUGIN_SDK_MODULE at this file and the
+ *    plugin's loadSdk() imports it instead of the real package, so the whole
  *    CLI runs end to end without a Copilot login. Behaviour is scripted through
  *    COPILOT_FAKE_CONFIG (JSON) and every call is appended to COPILOT_FAKE_LOG
  *    (JSON lines) so a spawned process can be asserted on afterwards.
@@ -242,5 +242,5 @@ function summarizeConfig(config) {
   };
 }
 
-// The name the companion's loadSdk() destructures from the module.
+// The name the plugin's loadSdk() destructures from the module.
 export { FakeCopilotClient as CopilotClient };

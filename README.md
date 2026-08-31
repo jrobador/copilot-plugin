@@ -36,8 +36,8 @@ have `copilot` on your PATH, that one is used instead.
 ## Install
 
 ```bash
-/plugin marketplace add jrobador/copilot-plugin-cc
-/plugin install copilot@copilot-plugin-cc
+/plugin marketplace add jrobador/copilot-plugin
+/plugin install copilot@copilot-plugin
 /reload-plugins
 /copilot:setup
 ```
@@ -280,7 +280,7 @@ tells you so instead of silently working around it.
 ```
 Claude Code
   └─ slash command (.md, mostly prompt)
-       └─ scripts/copilot-companion.mjs        one CLI: setup|review|task|status|result|cancel
+       └─ bin/copilot-plugin.mjs        one CLI: setup|review|task|status|result|cancel
             ├─ lib/copilot-client.mjs          @github/copilot-sdk over JSON-RPC
             │    ├─ lib/permissions.mjs        decides every permission request
             │    └─ lib/run-command.mjs        the argv-only shell replacement
@@ -289,7 +289,7 @@ Claude Code
 ```
 
 The commands hold almost no logic: they decide foreground vs. background and
-return the companion's stdout verbatim. Everything else is in the Node runtime,
+return the plugin's stdout verbatim. Everything else is in the Node runtime,
 which is testable without Claude Code in the loop (`npm test`).
 
 Job state lives per workspace under `$CLAUDE_PLUGIN_DATA/state/`, keyed by a
@@ -344,7 +344,7 @@ package are pinned there: they are released separately and have already
 drifted apart once (SDK 1.0.11 cannot start CLI 1.0.82). Bump them together
 and let `tests/installed-copy.test.mjs` prove the pair starts. The suite
 otherwise runs without the runtime, against `tests/fake-copilot-fixture.mjs`
-(`COPILOT_COMPANION_SDK_MODULE`).
+(`COPILOT_PLUGIN_SDK_MODULE`).
 
 ## Credits
 
@@ -352,7 +352,7 @@ This project is a derivative work, Apache-2.0 throughout:
 
 - [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc) — the
   original Codex plugin whose structure this follows.
-- [wagnersza/copilot-plugin-cc](https://github.com/wagnersza/copilot-plugin-cc)
+- [wagnersza/copilot-plugin](https://github.com/wagnersza/copilot-plugin)
   — the first port to Copilot, which this was seeded from.
 
 See [NOTICE](NOTICE) for the full attribution chain. Not affiliated with GitHub,

@@ -1,0 +1,11 @@
+{
+  "name": "copilot",
+  "version": "0.2.0-dev",
+  "description": "Use Copilot from Claude Code to review code or delegate tasks.",
+  "author": {
+    "name": "Joaquin Robador",
+    "url": "https://github.com/jrobador"
+  },
+  "homepage": "https://github.com/jrobador/copilot-plugin",
+  "license": "Apache-2.0"
+}

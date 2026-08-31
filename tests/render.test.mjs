@@ -8,7 +8,7 @@ import {
   renderStatusReport,
   renderStoredJobResult,
   renderCancelReport
-} from "../plugins/copilot/scripts/lib/render.mjs";
+} from "../lib/render.mjs";
 
 describe("renderSetupReport", () => {
   it("renders ready report", () => {

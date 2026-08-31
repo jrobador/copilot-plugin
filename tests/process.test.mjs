@@ -10,7 +10,7 @@ import {
   resolveBinary,
   terminateProcessTree,
   formatCommandFailure
-} from "../plugins/copilot/scripts/lib/process.mjs";
+} from "../lib/process.mjs";
 
 describe("resolveBinary", () => {
   it("finds node on every platform", () => {
@@ -154,7 +154,7 @@ describe("terminateProcessTree", () => {
     const killImpl = () => {
       calls.push(["kill"]);
     };
-    const common = { runCommandImpl, killImpl, identity: (line) => line.includes("copilot-companion.mjs") };
+    const common = { runCommandImpl, killImpl, identity: (line) => line.includes("copilot-plugin.mjs") };
 
     const foreign = terminateProcessTree(4242, { ...common, commandLineImpl: () => "C:\\Windows\\explorer.exe" });
     assert.equal(foreign.attempted, false);
@@ -165,7 +165,7 @@ describe("terminateProcessTree", () => {
     assert.match(unknown.reason, /not found|unreadable/);
     assert.deepEqual(calls, [], "nothing was killed");
 
-    const ours = terminateProcessTree(4242, { ...common, commandLineImpl: () => "node copilot-companion.mjs task-worker --job-id x", platform: "win32" });
+    const ours = terminateProcessTree(4242, { ...common, commandLineImpl: () => "node copilot-plugin.mjs task-worker --job-id x", platform: "win32" });
     assert.equal(ours.attempted, true);
     assert.equal(ours.delivered, true);
     assert.deepEqual(calls[0].slice(0, 3), ["taskkill", "/PID", "4242"]);

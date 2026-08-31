@@ -18,7 +18,7 @@ import {
   readJobFile,
   resolveJobFile,
   resolveJobLogFile
-} from "../plugins/copilot/scripts/lib/state.mjs";
+} from "../lib/state.mjs";
 
 describe("state", () => {
   let tempDir;

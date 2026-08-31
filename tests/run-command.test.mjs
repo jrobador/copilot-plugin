@@ -5,9 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { createWorkspacePolicy } from "../plugins/copilot/scripts/lib/paths.mjs";
-import { READ_ONLY, WORKSPACE_WRITE } from "../plugins/copilot/scripts/lib/permissions.mjs";
-import { resolveBinary } from "../plugins/copilot/scripts/lib/process.mjs";
+import { createWorkspacePolicy } from "../lib/paths.mjs";
+import { READ_ONLY, WORKSPACE_WRITE } from "../lib/permissions.mjs";
+import { resolveBinary } from "../lib/process.mjs";
 import {
   allowedPrograms,
   createRunCommandTool,
@@ -21,7 +21,7 @@ import {
   scrubEnvironment,
   SHELL_TOOL_NAMES,
   WRITE_PROGRAMS
-} from "../plugins/copilot/scripts/lib/run-command.mjs";
+} from "../lib/run-command.mjs";
 import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
 
 const IS_WINDOWS = process.platform === "win32";

@@ -7,11 +7,11 @@ import { fileURLToPath } from "node:url";
 
 import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
 import { scriptFakeSessions } from "./fake-copilot-fixture.mjs";
-import { ensureClient, SDK_MODULE_ENV, shutdownClient } from "../plugins/copilot/scripts/lib/copilot-client.mjs";
-import { getRepoRoot } from "../plugins/copilot/scripts/lib/git.mjs";
-import { readStoredJob } from "../plugins/copilot/scripts/lib/job-control.mjs";
-import { SHELL_TOOL_NAMES } from "../plugins/copilot/scripts/lib/run-command.mjs";
-import { executeApprovalResume, executeReviewRun, executeTaskRun } from "../plugins/copilot/scripts/lib/runs.mjs";
+import { ensureClient, SDK_MODULE_ENV, shutdownClient } from "../lib/copilot-client.mjs";
+import { getRepoRoot } from "../lib/git.mjs";
+import { readStoredJob } from "../lib/job-control.mjs";
+import { SHELL_TOOL_NAMES } from "../lib/run-command.mjs";
+import { executeApprovalResume, executeReviewRun, executeTaskRun } from "../lib/runs.mjs";
 import {
   AWAITING_APPROVAL,
   listJobs,
@@ -19,15 +19,15 @@ import {
   resolveJobFile,
   upsertJob,
   writeJobFile
-} from "../plugins/copilot/scripts/lib/state.mjs";
-import { createJobRecord, runTrackedJob, SESSION_ID_ENV } from "../plugins/copilot/scripts/lib/tracked-jobs.mjs";
+} from "../lib/state.mjs";
+import { createJobRecord, runTrackedJob, SESSION_ID_ENV } from "../lib/tracked-jobs.mjs";
 import {
   enqueueBackgroundTask,
   handleApprove,
   handleApproveWorker,
   handleCancel,
   handleTaskWorker
-} from "../plugins/copilot/scripts/copilot-companion.mjs";
+} from "../bin/copilot-plugin.mjs";
 
 const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fake-copilot-fixture.mjs");
 const CLAUDE_SESSION = "claude-session-for-runs-test";
@@ -124,7 +124,7 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
 
     assert.equal(execution.exitStatus, 0);
     assert.equal(execution.payload.rawOutput, "Task done.");
-    assert.ok(execution.sessionId.startsWith("copilot-companion-task"));
+    assert.ok(execution.sessionId.startsWith("copilot-plugin-task"));
     firstTaskSessionId = execution.sessionId;
 
     const stored = readStoredJob(tempDir, job.id);

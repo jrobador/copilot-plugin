@@ -2,16 +2,16 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { FakeCopilotClient } from "./fake-copilot-fixture.mjs";
-import { buildPersistentTaskSessionId, parseStructuredOutput } from "../plugins/copilot/scripts/lib/copilot-client.mjs";
+import { buildPersistentTaskSessionId, parseStructuredOutput } from "../lib/copilot-client.mjs";
 
 // The session id becomes a directory name under ~/.copilot/session-state/,
 // so it has to be a slug. These assertions previously expected the
-// human-readable "Copilot Companion Task ..." string, which is what Codex calls
+// human-readable "Copilot Plugin Task ..." string, which is what Codex calls
 // a thread *name* -- a different concept that survived the port.
 describe("runtime: buildPersistentTaskSessionId", () => {
   it("returns a slug carrying the task prefix", () => {
     const id = buildPersistentTaskSessionId("Fix the authentication bug");
-    assert.ok(id.startsWith("copilot-companion-task"));
+    assert.ok(id.startsWith("copilot-plugin-task"));
     assert.ok(id.includes("fix-the-authentication-bug"));
   });
 
@@ -22,7 +22,7 @@ describe("runtime: buildPersistentTaskSessionId", () => {
 
   it("handles empty prompt", () => {
     const id = buildPersistentTaskSessionId("");
-    assert.match(id, /^copilot-companion-task-[a-z0-9]+$/);
+    assert.match(id, /^copilot-plugin-task-[a-z0-9]+$/);
   });
 
   it("shortens long prompts", () => {
@@ -40,7 +40,7 @@ describe("runtime: buildPersistentTaskSessionId", () => {
       const second = buildPersistentTaskSessionId("Fix the authentication bug");
       assert.notEqual(first, second);
       assert.match(second, /^[a-z0-9-]+$/);
-      assert.ok(second.startsWith("copilot-companion-task-fix-the-authentication-bug-"));
+      assert.ok(second.startsWith("copilot-plugin-task-fix-the-authentication-bug-"));
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { normalizeArgv, parseArgs, splitRawArgumentString } from "../plugins/copilot/scripts/lib/args.mjs";
+import { normalizeArgv, parseArgs, splitRawArgumentString } from "../lib/args.mjs";
 
 describe("parseArgs", () => {
   it("parses boolean options", () => {
@@ -83,7 +83,7 @@ describe("splitRawArgumentString", () => {
   });
 });
 
-// Audit M7 / task P1-7. The companion re-tokenizes argv only when it receives
+// Audit M7 / task P1-7. The plugin re-tokenizes argv only when it receives
 // exactly one token, so `task "fix C:\x"` and `task --write "fix C:\x"` used to
 // parse the same prompt differently.
 describe("normalizeArgv", () => {

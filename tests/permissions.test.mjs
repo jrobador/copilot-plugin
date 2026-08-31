@@ -14,7 +14,7 @@ import {
   READ_ONLY,
   RUN_COMMAND_TOOL_NAME,
   WORKSPACE_WRITE
-} from "../plugins/copilot/scripts/lib/permissions.mjs";
+} from "../lib/permissions.mjs";
 import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
 
 const shell = (overrides = {}) => ({

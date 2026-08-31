@@ -15,16 +15,16 @@ import {
   runPrompt,
   SDK_MODULE_ENV,
   shutdownClient
-} from "../plugins/copilot/scripts/lib/copilot-client.mjs";
+} from "../lib/copilot-client.mjs";
 import { FakeCopilotClient } from "./fake-copilot-fixture.mjs";
 import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
 
 const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fake-copilot-fixture.mjs");
 
-// The companion imports @github/copilot-sdk by name, which needs a login to do
-// anything. COPILOT_COMPANION_SDK_MODULE swaps in the fixture so the real
+// The plugin imports @github/copilot-sdk by name, which needs a login to do
+// anything. COPILOT_PLUGIN_SDK_MODULE swaps in the fixture so the real
 // session/prompt/permission plumbing can be exercised in tests.
-describe("SDK injection through COPILOT_COMPANION_SDK_MODULE", () => {
+describe("SDK injection through COPILOT_PLUGIN_SDK_MODULE", () => {
   let previous;
   let ws;
 

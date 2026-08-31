@@ -27,7 +27,7 @@ jobs:
           cache: npm
 
       # `npm ci` enforces the lockfile; `npm install` would happily resolve a
-      # different tree. The Copilot runtime lives in plugins/copilot and needs
+      # different tree. The Copilot runtime is an optional dependency and needs
       # credentials to do anything, so the suite runs against the fake fixture
       # without it.
       - run: npm ci

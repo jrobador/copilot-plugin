@@ -1,4 +1,4 @@
-copilot-plugin-cc
+copilot-plugin
 Copyright 2026 Joaquin Robador
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,18 +17,12 @@ limitations under the License.
 ATTRIBUTION
 
 This project is a derivative work. Per section 4 of the Apache License 2.0,
-the modifications and their provenance are stated below.
+the original work whose structure this follows is stated below.
 
-1. Original work: "Codex plugin for Claude Code"
-   Copyright 2026 OpenAI
-   Licensed under the Apache License, Version 2.0
-   Source: https://github.com/openai/codex-plugin-cc
-
-2. Intermediate derivative work: "copilot-plugin-cc"
-   Copyright 2026 Wagner Souza (github.com/wagnersza)
-   Licensed under the Apache License, Version 2.0
-   Source: https://github.com/wagnersza/copilot-plugin-cc
-   Seeded from commit 4837b0b4e230e9fab93727d9a99f2d78e1f9673c (2026-04-02)
+Original work: "Codex plugin for Claude Code"
+Copyright 2026 OpenAI
+Licensed under the Apache License, Version 2.0
+Source: https://github.com/openai/codex-plugin-cc
 
 This project is NOT affiliated with, endorsed by, or sponsored by GitHub, Inc.,
 Microsoft Corporation, OpenAI, or Anthropic. "GitHub Copilot" is a trademark of

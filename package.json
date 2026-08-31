@@ -9,7 +9,8 @@
     "node": ">=20.0.0"
   },
   "bin": {
-    "copilot-plugin": "bin/copilot-plugin.mjs"
+    "copilot-plugin": "bin/copilot-plugin.mjs",
+    "copilot-mcp": "bin/copilot-mcp.mjs"
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
@@ -17,8 +18,8 @@
     "typecheck": "tsc -p jsconfig.json"
   },
   "optionalDependencies": {
-    "@github/copilot-sdk": "1.0.11",
-    "@github/copilot": "1.0.80"
+    "@github/copilot": "1.0.80",
+    "@github/copilot-sdk": "1.0.11"
   },
   "author": "Joaquin Robador <jrobador37@gmail.com>",
   "repository": {
@@ -28,5 +29,8 @@
   "devDependencies": {
     "@types/node": "^22.20.1",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }

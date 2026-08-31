@@ -160,9 +160,7 @@ can go wrong while they do it. Every fix ships with a regression test.
 
 ## 0.1.0 — unreleased
 
-First release of this fork. Seeded from
-[wagnersza/copilot-plugin-cc](https://github.com/wagnersza/copilot-plugin-cc)
-at `4837b0b`, itself a port of OpenAI's Codex plugin for Claude Code.
+First release. Follows the structure of OpenAI's Codex plugin for Claude Code ([openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc)), ported to GitHub Copilot.
 
 ### Security
 

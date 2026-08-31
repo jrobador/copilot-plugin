@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "node \"<COPILOT_PLUGIN_DIR>/bin/session-lifecycle-hook.mjs\" SessionStart" }
+    ],
+    "sessionEnd": [
+      { "command": "node \"<COPILOT_PLUGIN_DIR>/bin/session-lifecycle-hook.mjs\" SessionEnd" }
+    ],
+    "stop": [
+      { "command": "node \"<COPILOT_PLUGIN_DIR>/bin/stop-review-gate-hook.mjs\"" }
+    ]
+  }
+}

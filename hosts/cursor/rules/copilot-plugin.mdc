@@ -1,0 +1,26 @@
+---
+description: How to use the Copilot plugin's MCP tools (review, rescue, approvals) in Cursor
+alwaysApply: false
+---
+
+# Copilot plugin
+
+This workspace exposes GitHub Copilot through MCP tools (prefix `copilot_`).
+Use them to get a second model's review or to hand Copilot a task.
+
+- **Reviews are read-only.** `copilot_review` and `copilot_adversarial_review`
+  never edit files; present their findings ordered by severity, with file and
+  line, and stop. **Do not auto-apply any fix from a review.** Ask which
+  findings, if any, the user wants addressed before touching a file.
+- **`copilot_rescue` is read-only unless `write: true`.** Only pass `write: true`
+  when the user asked Copilot to change files. For "investigate", "diagnose",
+  "explain", leave it read-only; Copilot reports a diff instead of applying it.
+- **Long tasks:** pass `background: true`, then poll `copilot_status` and read
+  `copilot_result` when it finishes.
+- **Approvals:** a job can pause (`awaiting-approval`) on a permission that is
+  the user's to grant. Surface it — name what it wants to do — and let the user
+  run `copilot_approve` or `copilot_deny`. Never approve on their behalf.
+- Return each tool's output verbatim; do not paraphrase findings or invent
+  file/line references.
+- If a tool reports the runtime is missing or unauthenticated, tell the user to
+  run `copilot_setup` (and `copilot login` in a terminal), and stop.

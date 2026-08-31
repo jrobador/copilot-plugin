@@ -42,6 +42,34 @@ function emitDecision(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
+/**
+ * Where the turn happened, across hosts: Claude Code sends `cwd`, Cursor sends
+ * a workspace path under one of a few names.
+ */
+export function resolveHookCwd(input = {}) {
+  const roots = Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : null;
+  return input.cwd || input.workspacePath || roots || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+
+/**
+ * A block payload in both hosts' shapes at once. Claude Code reads `decision` /
+ * `reason`; Cursor reads `permission` / `agent_message`. Extra keys are ignored
+ * by each, so one object serves both.
+ */
+export function blockPayload(reason) {
+  return {
+    decision: "block",
+    reason,
+    permission: "deny",
+    agent_message: reason,
+    user_message: reason
+  };
+}
+
+function emitBlock(reason) {
+  emitDecision(blockPayload(reason));
+}
+
 function logNote(message) {
   if (!message) {
     return;
@@ -231,7 +259,7 @@ function workingTreeIsClean(workspaceRoot) {
 
 export function main() {
   const input = readHookInput();
-  const cwd = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const cwd = resolveHookCwd(input);
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
 
@@ -267,10 +295,10 @@ export function main() {
   const stop = decideStop(review, runningTaskNote);
   const budget = applyBlockBudget(workspaceRoot, Boolean(stop));
   if (stop) {
-    if (budget.disabled) {
-      stop.reason = `${stop.reason} (Review gate disabled after ${budget.count} consecutive blocks; re-enable with /copilot:setup --enable-review-gate.)`;
-    }
-    emitDecision(stop);
+    const reason = budget.disabled
+      ? `${stop.reason} (Review gate disabled after ${budget.count} consecutive blocks; re-enable with /copilot:setup --enable-review-gate.)`
+      : stop.reason;
+    emitBlock(reason);
     return;
   }
 

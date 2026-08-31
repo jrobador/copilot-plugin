@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "copilot": {
+      "command": "copilot-mcp"
+    }
+  }
+}

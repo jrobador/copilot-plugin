@@ -8,9 +8,11 @@ import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
 import { getConfig, setConfig } from "../lib/state.mjs";
 import {
   applyBlockBudget,
+  blockPayload,
   decideStop,
   GATE_MAX_CONSECUTIVE_BLOCKS,
   parseStopReviewOutput,
+  resolveHookCwd,
   runStopReview
 } from "../bin/stop-review-gate-hook.mjs";
 
@@ -84,6 +86,25 @@ describe("stop gate: runStopReview", () => {
       assert.equal(decideStop(review), null, `expected no block decision; got ${JSON.stringify(decideStop(review))}`);
     });
   }
+});
+
+// Cross-host: the stop hook runs under Claude Code and Cursor, which name
+// their stdin fields differently.
+describe("stop gate: cross-host input/output", () => {
+  it("resolveHookCwd reads the workspace from either host's fields", () => {
+    assert.equal(resolveHookCwd({ cwd: "/a" }), "/a");
+    assert.equal(resolveHookCwd({ workspacePath: "/b" }), "/b");
+    assert.equal(resolveHookCwd({ workspace_roots: ["/c", "/d"] }), "/c");
+    assert.equal(typeof resolveHookCwd({}), "string");
+  });
+
+  it("blockPayload carries both hosts' block shapes", () => {
+    const p = blockPayload("tests still fail");
+    assert.equal(p.decision, "block"); // Claude Code
+    assert.equal(p.reason, "tests still fail");
+    assert.equal(p.permission, "deny"); // Cursor
+    assert.equal(p.agent_message, "tests still fail");
+  });
 });
 
 describe("stop gate: block budget", () => {

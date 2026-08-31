@@ -80,14 +80,25 @@ export function cleanupSessionJobs(cwd, sessionId, seams = {}) {
   return { stopped };
 }
 
+/** The session id across hosts: Claude Code sends `session_id`, Cursor its own. */
+function sessionIdOf(input = {}) {
+  return input.session_id || input.conversation_id || process.env[SESSION_ID_ENV] || null;
+}
+
+/** The workspace across hosts. */
+function cwdOf(input = {}) {
+  const roots = Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : null;
+  return input.cwd || input.workspacePath || roots || process.cwd();
+}
+
 function handleSessionStart(input) {
-  appendEnvVar(SESSION_ID_ENV, input.session_id);
+  // CLAUDE_ENV_FILE is a Claude Code mechanism; appendEnvVar no-ops elsewhere.
+  appendEnvVar(SESSION_ID_ENV, sessionIdOf(input));
   appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
 }
 
 function handleSessionEnd(input) {
-  const cwd = input.cwd || process.cwd();
-  cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
+  cleanupSessionJobs(cwdOf(input), sessionIdOf(input));
 }
 
 async function main() {

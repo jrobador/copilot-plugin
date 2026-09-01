@@ -1,6 +1,6 @@
 {
   "name": "copilot-plugin",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Delegate code review and coding tasks to GitHub Copilot from Claude Code or Cursor.",
   "keywords": [

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   renderSetupReport,
+  renderDegradedBanner,
   renderReviewResult,
   renderTaskResult,
   renderStatusReport,
@@ -27,7 +28,7 @@ describe("renderSetupReport", () => {
     assert.match(output, /Copilot Setup/);
     assert.match(output, /ready/);
     assert.match(output, /models \(3\): opus, sonnet, gpt-5\.4/);
-    assert.match(output, /allowed programs \(--write jobs\): defaults only/);
+    assert.match(output, /allowed programs \(every mode\): defaults only/);
   });
 
   it("shows no models when the account is not signed in", () => {
@@ -59,7 +60,7 @@ describe("renderSetupReport", () => {
       actionsTaken: [],
       nextSteps: []
     });
-    assert.match(output, /allowed programs \(--write jobs\): bun, pytest/);
+    assert.match(output, /allowed programs \(every mode\): bun, pytest/);
   });
 });
 
@@ -112,9 +113,12 @@ describe("renderTaskResult", () => {
         denials: [{ request: "write: /etc/x", reason: "Refused to write /etc/x: outside the workspace." }]
       }
     );
+    // A denial banners the output: the reader must not reach the conclusion
+    // before learning the run was incomplete.
     assert.equal(
       output,
-      "Done.\n\nFiles changed:\n- src/a.js\n\nDenied:\n- write: /etc/x — Refused to write /etc/x: outside the workspace.\n"
+      "> **DEGRADED RUN** — 1 request was refused, so this run did not see everything it went looking for.\n> Treat the conclusion below as unverified. The refused requests are listed at the end.\n\n" +
+        "Done.\n\nFiles changed:\n- src/a.js\n\nDenied:\n- write: /etc/x — Refused to write /etc/x: outside the workspace.\n"
     );
   });
 
@@ -130,7 +134,8 @@ describe("renderTaskResult", () => {
     );
     assert.equal(
       output,
-      "Done.\n\nShell: unfenced (--unsafe-shell)\n\nFiles changed:\n- src/a.js\n\nDenied:\n- command: node -e 1 — no\n"
+      "> **DEGRADED RUN** — 1 request was refused, so this run did not see everything it went looking for.\n> Treat the conclusion below as unverified. The refused requests are listed at the end.\n\n" +
+        "Done.\n\nShell: unfenced (--unsafe-shell)\n\nFiles changed:\n- src/a.js\n\nDenied:\n- command: node -e 1 — no\n"
     );
   });
 
@@ -195,5 +200,33 @@ describe("renderCancelReport", () => {
     const output = renderCancelReport({ id: "job-1", title: "Task", summary: "Fix bug" });
     assert.match(output, /Copilot Cancel/);
     assert.match(output, /job-1/);
+  });
+});
+
+describe("renderDegradedBanner and the review verdict", () => {
+  const parsed = (verdict = "approve", findings = []) => ({
+    parsed: { verdict, summary: "Looks fine.", findings, next_steps: [] },
+    rawOutput: "",
+    parseError: null
+  });
+  const meta = (denials) => ({ reviewLabel: "Review", targetLabel: "working tree", denials });
+
+  it("says nothing when nothing was refused", () => {
+    assert.equal(renderDegradedBanner([]), "");
+    assert.equal(renderDegradedBanner(undefined), "");
+    const output = renderReviewResult(parsed(), meta([]));
+    assert.match(output, /Verdict: approve/);
+    assert.match(output, /No material findings\./);
+    assert.doesNotMatch(output, /DEGRADED/);
+  });
+
+  it("invalidates a clean verdict reached without part of the evidence", () => {
+    const output = renderReviewResult(parsed(), meta([{ request: "read: src/secret.js", reason: "outside the workspace" }]));
+    assert.match(output, /DEGRADED RUN/);
+    assert.match(output, /Verdict: unreliable — the model said "approve"/);
+    // "No findings" from a review that could not read the code is not a result.
+    assert.doesNotMatch(output, /No material findings\./);
+    assert.match(output, /that is not evidence that there is nothing wrong/);
+    assert.match(output, /Denied:\n- read: src\/secret\.js/);
   });
 });

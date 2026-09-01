@@ -162,7 +162,9 @@ Aliases: `opus`, `sonnet`, `codex`, `gemini`. Anything else is passed through as
 
 Every privileged action Copilot attempts is decided by the plugin, not by the prompt. Write access is granted by you, per rescue, with `--write`; nothing else turns it on.
 
-**Read-only jobs** — both reviews, and any rescue without `--write`:
+There are three modes. A rescue is **read-only** by default and **write-capable** with `--write`; both reviews run in the third, **execute** mode: run anything, change nothing.
+
+**Read-only jobs** — a rescue without `--write`, and any review run with `--read-only`:
 
 | Request | Decision |
 |---|---|
@@ -174,13 +176,31 @@ Every privileged action Copilot attempts is decided by the plugin, not by the pr
 | MCP tool not declared read-only | refused |
 | Read or write a path outside the workspace (after resolving `..`, symlinks and Windows short names) | refused |
 
-**Write-capable rescues** additionally allow writes, network access, and `run_command` with the common toolchains. Writes are confined to the workspace root: the git top level, or the `-C` directory when there is no repository.
+**Execute jobs** — what `/copilot:review` and `/copilot:adversarial-review` now run in — add the full `run_command` toolchain (`npm`, `node`, `pytest`, `cargo`, `make`, …) so a review can settle a question by running the repository's tests, and change nothing at all: every write, URL fetch and mutating git subcommand is still refused. The read/write axis was the wrong one for a review, which needs the crossed axis: execute everything, mutate nothing.
+
+The ceiling, stated plainly: `run_command` fences which program starts, with which arguments, in which directory. It does not fence what that program then does. A test suite writes caches, deletes files and opens sockets, and none of that reaches the permission handler, which only ever sees the tool call. "Execute everything, mutate nothing" is a promise about what Copilot may *ask for*, not about what your test suite does once it starts — and the mode is not network-isolated even though the model itself may not fetch URLs. Only an OS sandbox closes that, and this plugin is not one.
+
+**Write-capable rescues** additionally allow writes and network access. Writes are confined to the workspace root: the git top level, or the `-C` directory when there is no repository, plus any directory added with `--add-dir`.
 
 **Refused in both modes**: reads and writes outside the workspace, command arguments that name paths outside it, writes to `.git/`, `.github/workflows/`, `.husky/` and `.vscode/tasks.json` (they run code on your behalf later), writes to files hardlinked elsewhere, and writes to Copilot's persistent memory — a delegated job should not quietly change what Copilot remembers about you.
 
 A `--write` job is also refused when its workspace root is your home directory, an ancestor of it, or a drive root, because "inside the workspace" would then mean everything you own. Pass `--allow-wide-root` if you really mean it.
 
+**Working across more than one directory.** `--add-dir <path>` on a rescue (repeatable) adds a directory to that job's fence — a sibling repository, a shared library checkout, a directory of specs. Reads, writes and `run_command` path arguments are then judged against the workspace root *and* each added directory, and the runtime is told about them so its file completion sees them. Every other rule travels along: an added directory's `.git/`, `.github/workflows/`, `.husky/` and `.vscode/tasks.json` are protected exactly like the workspace's, and `--add-dir` naming your home directory or a drive root is refused in a `--write` job for the same reason a wide workspace root is. A path that does not exist is an error, not a warning. Not exposed over MCP.
+
 `git` is fenced beyond the path rules, because its arguments are refs and config keys rather than paths. `--global` and `--system` are refused in both modes, and a `--write` job may not run `git push`, `git credential`, `git config`, `git reset --hard` or `git clean -f`: it can do its work in the repository, but not publish it, read your credential helper, or throw away changes you never handed it.
+
+### A degraded run says so
+
+A run that was refused anything — a read outside the fence, a command its mode does not allow, a program that is not on PATH — is **degraded**. Three models once reported "no findings" on this repository after being denied most of the files they asked for, and nothing in the output said the answer was partial. A silent false negative is worse than a loud error: it ends the search.
+
+So a degraded run is loud in four places at once: the job's status is `completed-degraded`, the command exits with status **2** (distinct from 1, which means it produced no output at all), the output carries a `DEGRADED RUN` banner above the conclusion, and a review's verdict is replaced with `Verdict: unreliable` — the model's own word is kept, but not allowed to stand as the answer. What was refused is listed under `Denied:` at the end.
+
+### Before you spend a turn
+
+`--help` on any subcommand prints its flags without contacting Copilot. It used to fall through to the prompt: `task --help` opened a session and paid for a turn having the model answer the literal text `--help`. An unknown flag is now an error rather than prompt text — free text that starts with a dash goes after `--`.
+
+`--dry-run` on `task`, `review` and `adversarial-review` validates the workspace root, every `--add-dir`, the paths your prompt names, the model, and which allowed programs actually resolve on PATH — then prints the list and exits. Nothing is sent to Copilot, so it costs nothing. Paths named in a prompt are checked before every real run too: naming a file outside the fence fails immediately, with the `--add-dir` you need spelled out, instead of letting the model discover the wall by walking into it.
 
 ### Shell
 
@@ -191,9 +211,11 @@ Copilot's runtime ships shell tools (`bash` on Unix, `powershell` on Windows, pl
 | Mode | Programs |
 |---|---|
 | read-only | `git` (`log diff show status blame grep ls-files rev-parse branch describe shortlog cat-file remote`; `branch`/`remote` in listing form only), `rg` |
-| `--write` | `git npm pnpm yarn npx node python python3 pytest dotnet cargo go make rg ls`, plus anything added with `/copilot:setup --allow-programs a,b,c` |
+| execute (both reviews) and `--write` | `git npm pnpm yarn npx node python python3 pytest dotnet cargo go make rg ls`, plus anything added with `/copilot:setup --allow-programs a,b,c`. In execute mode git is still held to its read-only subcommands. |
 
-Every argument that looks like a path is resolved and must land inside the workspace. Options that relocate a program or make it evaluate inline code are refused in both modes: `git -C`/`--git-dir`/`-c` before the subcommand, `node -e`/`-r`/`--import`, `python -c`, `npm --prefix`/`-g`, `make -C`/`-f`, `cargo --manifest-path`, `go -C`, `rg --pre`, and the like.
+Programs added with `/copilot:setup --allow-programs` now apply in **every** mode. They used to be silently dropped outside `--write`, which made the setting dead for reviews — the jobs most likely to need one more tool.
+
+Every argument that looks like a path is resolved and must land inside the workspace (or an added directory). Options that relocate a program or make it evaluate inline code are refused in both modes: `git -C`/`--git-dir`/`-c` before the subcommand, `node -e`/`-r`/`--import`, `python -c`, `npm --prefix`/`-g`, `make -C`/`-f`, `cargo --manifest-path`, `go -C`, `rg --pre`, and the like.
 
 `--unsafe-shell` on a rescue restores the runtime's own shell tools. The job record and the output say so (`Shell: unfenced`). Claude never adds this flag on its own.
 

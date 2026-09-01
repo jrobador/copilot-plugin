@@ -80,11 +80,12 @@ function runCli(argv, cwd, seams = {}) {
     child.on("close", (code) => {
       const stdout = Buffer.concat(out).toString("utf8").trim();
       const stderr = Buffer.concat(err).toString("utf8").trim();
-      if (code === 0) {
-        finish({ ok: true, text: stdout || "(the command produced no output)" });
-      } else {
-        finish({ ok: false, text: stderr || stdout || `The Copilot CLI exited with code ${code}.` });
-      }
+      // stdout first, always: a degraded run exits non-zero but still carries
+      // the whole review on stdout, while stderr holds only the progress log.
+      finish({
+        ok: code === 0,
+        text: stdout || stderr || `The Copilot CLI exited with code ${code}.`
+      });
     });
   });
 }

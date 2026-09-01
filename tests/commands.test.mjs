@@ -129,3 +129,84 @@ describe("copilot-plugin CLI", () => {
     assert.match(result.stderr, /copilot login/);
   });
 });
+
+describe("copilot-plugin CLI: flags that must not cost anything", () => {
+  let repo;
+  let env;
+  let logFile;
+
+  function run(args) {
+    const result = spawnSync(process.execPath, [SCRIPT, ...args], {
+      cwd: repo,
+      env,
+      encoding: "utf8",
+      timeout: 60_000
+    });
+    return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  }
+
+  function sdkCalls() {
+    if (!fs.existsSync(logFile)) return [];
+    return fs
+      .readFileSync(logFile, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line).call);
+  }
+
+  before(() => {
+    repo = createTempWorkspace();
+    execSync("git init", { cwd: repo });
+    execSync("git config user.email test@test.com", { cwd: repo });
+    execSync("git config user.name Test", { cwd: repo });
+    fs.writeFileSync(path.join(repo, "f.txt"), "x\n");
+    execSync("git add . && git commit -m init", { cwd: repo });
+    logFile = path.join(repo, "sdk-calls.log");
+    env = {
+      ...process.env,
+      CLAUDE_PLUGIN_DATA: path.join(repo, ".plugin-data"),
+      COPILOT_PLUGIN_SDK_MODULE: FIXTURE,
+      COPILOT_PLUGIN_SESSION_ID: "cli-flag-session",
+      COPILOT_FAKE_LOG: logFile
+    };
+  });
+
+  after(() => cleanupDir(repo));
+
+  // The bug this pays for: `task --help` fell through to the prompt, created a
+  // session, and had the model answer the literal text "--help".
+  it("task --help prints help without opening a session", () => {
+    const result = run(["task", "--help"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Usage: copilot-plugin task/);
+    assert.ok(!sdkCalls().includes("createSession"), sdkCalls().join(","));
+  });
+
+  it("task --dry-run validates without opening a session", () => {
+    const result = run(["task", "--dry-run", "look at src/index.js"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Copilot Dry Run/);
+    assert.match(result.stdout, /Ready: yes/);
+    assert.ok(!sdkCalls().includes("createSession"), sdkCalls().join(","));
+  });
+
+  it("task --dry-run reports a missing --add-dir and exits non-zero", () => {
+    const result = run(["task", "--dry-run", "--add-dir", "./definitely-not-here", "do something"]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /definitely-not-here does not exist/);
+    assert.match(result.stdout, /Ready: no/);
+  });
+
+  it("refuses a mistyped flag instead of sending it as the prompt", () => {
+    const result = run(["task", "--backgruond", "fix the bug"]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr + result.stdout, /Unknown option --backgruond/);
+    assert.ok(!sdkCalls().includes("createSession"));
+  });
+
+  it("accepts --read-only and the no-op --wait that callers forward", () => {
+    const result = run(["task", "--read-only", "--wait", "--dry-run", "check something"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Permission mode: read-only/);
+  });
+});

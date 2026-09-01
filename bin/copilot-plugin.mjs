@@ -13,11 +13,14 @@ import {
   getSdkStatus,
   getSessionRuntimeStatus,
   listModels,
+  READ_ONLY,
   SDK_INSTALL_HINT,
   shutdownClient
 } from "../lib/copilot-client.mjs";
 import { readStdinIfPiped } from "../lib/fs.mjs";
 import { resolveReviewTarget } from "../lib/git.mjs";
+import { resolveAdditionalDirectories } from "../lib/paths.mjs";
+import { WORKSPACE_EXECUTE } from "../lib/permissions.mjs";
 import { binaryAvailable, runCommandChecked } from "../lib/process.mjs";
 import { ROOT_DIR } from "../lib/plugin-root.mjs";
 import {
@@ -25,6 +28,7 @@ import {
   buildTaskRunMetadata,
   COPILOT_AUTH,
   copilotSessionIdOf,
+  dryRunReport,
   ensureCopilotReady,
   executeApprovalResume,
   executeReviewRun,
@@ -45,6 +49,7 @@ import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
   readStoredJob,
+  reapStaleJobs,
   resolveApprovableJob,
   resolveCancelableJob,
   resolveResultJob,
@@ -55,16 +60,19 @@ import {
   createJobLogFile,
   createJobProgressUpdater,
   createJobRecord,
+  createPartialOutputWriter,
   createProgressReporter,
   nowIso,
   runTrackedJob,
   SESSION_ID_ENV,
+  startWorkerWatchdog,
   terminateWorker
 } from "../lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "../lib/workspace.mjs";
 import {
   renderStoredJobResult,
   renderCancelReport,
+  renderDryRun,
   renderJobStatusReport,
   renderSetupReport,
   renderStatusReport
@@ -73,6 +81,100 @@ import {
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 
+/**
+ * Per-subcommand help, printed before anything is parsed or connected.
+ *
+ * `--help` used to fall through to the prompt: `task --help` created a session
+ * and spent a real turn having the model answer the text "--help". Help must
+ * never cost money.
+ */
+const COMMON_FLAGS = [
+  "  -C, --cwd <dir>       Run against this directory instead of the current one.",
+  "  --json                Machine-readable output.",
+  "  --help                Print this and exit, without contacting Copilot."
+];
+
+const REVIEW_FLAGS = [
+  "  --base <ref>          Review the branch diff against this ref.",
+  "  --scope <auto|working-tree|branch>",
+  "  --read-only           Narrow to git and rg; the default also runs the repository's toolchain.",
+  "  --dry-run             Validate everything and print what would run. Costs nothing.",
+  "  --model <model|alias> Model id, or one of: opus, sonnet, codex, gemini.",
+  "  --effort <low|medium|high|xhigh|max>"
+];
+
+const COMMAND_HELP = {
+  setup: [
+    "Usage: copilot-plugin setup [--install-runtime] [--enable-review-gate|--disable-review-gate]",
+    "                            [--allow-programs a,b,c|--clear-allowed-programs] [--json]",
+    "",
+    "Report the runtime, authentication and per-workspace settings.",
+    "",
+    "  --install-runtime     Install the Copilot SDK into the plugin directory.",
+    "  --allow-programs      Extra programs run_command may spawn, in every mode.",
+    ...COMMON_FLAGS
+  ],
+  review: [
+    "Usage: copilot-plugin review [flags] [focus text]",
+    "",
+    "Review the working tree or the branch. Never writes; runs the repository's own",
+    "commands to check its conclusions unless --read-only is given.",
+    "",
+    ...REVIEW_FLAGS,
+    ...COMMON_FLAGS
+  ],
+  "adversarial-review": [
+    "Usage: copilot-plugin adversarial-review [flags] [focus text]",
+    "",
+    "A review that attacks the design, not just the code.",
+    "",
+    ...REVIEW_FLAGS,
+    ...COMMON_FLAGS
+  ],
+  task: [
+    "Usage: copilot-plugin task [flags] [prompt]",
+    "",
+    "Hand a task to Copilot. Blocks until it finishes unless --background is given.",
+    "Free text that starts with a dash goes after `--`.",
+    "",
+    "  --write               Let Copilot edit files. Off by default: it reports a diff.",
+    "  --read-only           Force read-only even if --write is also present.",
+    "  --add-dir <path>      Add a directory to this job's fence. Repeatable.",
+    "  --dry-run             Validate root, add-dirs, prompt paths, model and PATH. Costs nothing.",
+    "  --background          Run detached and return a job id.",
+    "  --wait                Block until the job finishes. This is the default.",
+    "  --resume-last         Continue the last Copilot thread for this repository.",
+    "  --fresh               Start a new thread.",
+    "  --unsafe-shell        Restore the runtime's own shell tools. Unfenced.",
+    "  --allow-wide-root     Allow a --write job whose root is your home or a drive root.",
+    "  --prompt-file <path>  Read the prompt from a file.",
+    "  --model <model|alias> Model id, or one of: opus, sonnet, codex, gemini.",
+    "  --effort <low|medium|high|xhigh|max>",
+    ...COMMON_FLAGS
+  ],
+  status: [
+    "Usage: copilot-plugin status [job-id] [--all] [--wait] [--json]",
+    "",
+    "  --all                 Every session's jobs for this workspace, not just this one's.",
+    "  --wait                With a job id, block until that job leaves queued/running.",
+    "  --timeout-ms <ms>     How long --wait waits. Default 240000.",
+    ...COMMON_FLAGS
+  ],
+  result: ["Usage: copilot-plugin result [job-id] [--json]", "", "The stored output of a finished job.", "", ...COMMON_FLAGS],
+  approve: ["Usage: copilot-plugin approve [job-id] [--json]", "", "Approve a job paused on a permission; it resumes in the background.", "", ...COMMON_FLAGS],
+  deny: ["Usage: copilot-plugin deny [job-id] [--json]", "", "Deny a job paused on a permission; it closes without continuing.", "", ...COMMON_FLAGS],
+  cancel: ["Usage: copilot-plugin cancel [job-id] [--json]", "", "Stop a running or paused job and its whole process tree.", "", ...COMMON_FLAGS]
+};
+
+function printCommandHelp(subcommand) {
+  const help = COMMAND_HELP[subcommand];
+  if (!help) {
+    printUsage();
+    return;
+  }
+  console.log(help.join("\n"));
+}
+
 function printUsage() {
   console.log(
     [
@@ -80,12 +182,14 @@ function printUsage() {
       "  node bin/copilot-plugin.mjs setup [--install-runtime] [--enable-review-gate|--disable-review-gate] [--allow-programs a,b,c|--clear-allowed-programs] [--json]",
       "  node bin/copilot-plugin.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>]",
       "  node bin/copilot-plugin.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>] [focus text]",
-      "  node bin/copilot-plugin.mjs task [--background] [--write] [--unsafe-shell] [--allow-wide-root] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <low|medium|high|xhigh|max>] [prompt]",
+      "  node bin/copilot-plugin.mjs task [--background|--wait] [--write|--read-only] [--dry-run] [--add-dir <path>]... [--unsafe-shell] [--allow-wide-root] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <level>] [prompt]",
       "  node bin/copilot-plugin.mjs status [job-id] [--all] [--json]",
       "  node bin/copilot-plugin.mjs result [job-id] [--json]",
       "  node bin/copilot-plugin.mjs approve [job-id] [--json]",
       "  node bin/copilot-plugin.mjs deny [job-id] [--json]",
-      "  node bin/copilot-plugin.mjs cancel [job-id] [--json]"
+      "  node bin/copilot-plugin.mjs cancel [job-id] [--json]",
+      "",
+      "Any command: --help prints its flags without contacting Copilot."
     ].join("\n")
   );
 }
@@ -239,7 +343,7 @@ async function handleSetup(argv) {
     setConfig(workspaceRoot, "extraPrograms", programs);
     actionsTaken.push(
       programs.length > 0
-        ? `Allowed run_command to spawn ${programs.join(", ")} in --write jobs for ${workspaceRoot}.`
+        ? `Allowed run_command to spawn ${programs.join(", ")} in every mode for ${workspaceRoot}.`
         : `Cleared the extra run_command programs for ${workspaceRoot}.`
     );
   } else if (options["clear-allowed-programs"]) {
@@ -347,7 +451,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write, flags = {}) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, unsafeShell, allowWideRoot, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, unsafeShell, allowWideRoot, addDirs, resumeLast, jobId }) {
   return {
     cwd,
     model,
@@ -356,6 +460,8 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, unsafeShell, allo
     write,
     unsafeShell: Boolean(unsafeShell),
     allowWideRoot: Boolean(allowWideRoot),
+    // Absolute already: the background worker resolves nothing.
+    addDirs: Array.isArray(addDirs) ? addDirs : [],
     resumeLast,
     jobId
   };
@@ -404,6 +510,8 @@ function spawnDetachedTaskWorker(cwd, jobId, spawnImpl = spawn) {
 
 /** @param {{spawnImpl?: typeof spawn}} [seams]  Test seam for the detached worker. */
 export function enqueueBackgroundTask(cwd, job, request, seams = {}) {
+  // Close out anything whose worker died before adding one more.
+  reapStaleJobs(cwd);
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
 
@@ -441,7 +549,7 @@ export function enqueueBackgroundTask(cwd, job, request, seams = {}) {
 async function handleReviewCommand(argv, config) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["base", "scope", "model", "effort", "cwd"],
-    booleanOptions: ["json", "background", "wait"],
+    booleanOptions: ["json", "background", "wait", "read-only", "dry-run"],
     aliasMap: {
       m: "model"
     }
@@ -452,6 +560,24 @@ async function handleReviewCommand(argv, config) {
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const focusText = positionals.join(" ").trim();
+  const permissionMode = options["read-only"] ? READ_ONLY : undefined;
+
+  if (options["dry-run"]) {
+    const report = await dryRunReport({
+      cwd,
+      workspaceRoot,
+      prompt: focusText,
+      model,
+      permissionMode: permissionMode ?? WORKSPACE_EXECUTE,
+      reviewName: config.reviewName,
+      base: options.base,
+      scope: options.scope
+    });
+    outputCommandResult(report, renderDryRun(report), options.json);
+    if (!report.ready) process.exitCode = 1;
+    return;
+  }
+
   const target = resolveReviewTarget(cwd, {
     base: options.base,
     scope: options.scope
@@ -477,6 +603,7 @@ async function handleReviewCommand(argv, config) {
         effort,
         focusText,
         reviewName: config.reviewName,
+        permissionMode,
         onProgress: progress
       }),
     { json: options.json }
@@ -492,7 +619,22 @@ async function handleReview(argv) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file"],
-    booleanOptions: ["json", "write", "unsafe-shell", "allow-wide-root", "resume-last", "resume", "fresh", "background"],
+    arrayOptions: ["add-dir"],
+    booleanOptions: [
+      "json",
+      "write",
+      "read-only",
+      "unsafe-shell",
+      "allow-wide-root",
+      "resume-last",
+      "resume",
+      "fresh",
+      "background",
+      // Blocking is already the default; accepted so a caller that forwards it
+      // gets a no-op instead of `--wait` silently becoming prompt text.
+      "wait",
+      "dry-run"
+    ],
     aliasMap: {
       m: "model"
     }
@@ -509,12 +651,32 @@ async function handleTask(argv) {
   if (resumeLast && fresh) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
-  const write = Boolean(options.write);
+  // --read-only wins over --write: the safer reading of a contradiction.
+  const write = Boolean(options.write) && !options["read-only"];
+
+  if (options["dry-run"]) {
+    const report = await dryRunReport({
+      cwd,
+      workspaceRoot,
+      addDirs: options["add-dir"],
+      prompt,
+      model,
+      write,
+      allowWideRoot: Boolean(options["allow-wide-root"])
+    });
+    outputCommandResult(report, renderDryRun(report), options.json);
+    if (!report.ready) process.exitCode = 1;
+    return;
+  }
+
   const flags = {
     unsafeShell: Boolean(options["unsafe-shell"]),
-    allowWideRoot: Boolean(options["allow-wide-root"])
+    allowWideRoot: Boolean(options["allow-wide-root"]),
+    // Resolved here so a typo fails at the prompt instead of inside a
+    // background worker nobody is watching.
+    addDirs: resolveAdditionalDirectories(options["add-dir"], cwd)
   };
-  assertWriteRootAcceptable({ write, allowWideRoot: flags.allowWideRoot }, workspaceRoot);
+  assertWriteRootAcceptable({ write, allowWideRoot: flags.allowWideRoot }, workspaceRoot, flags.addDirs);
   const taskMetadata = buildTaskRunMetadata({
     prompt,
     resumeLast
@@ -610,19 +772,36 @@ export async function handleTaskWorker(argv) {
       logFile: storedJob.logFile ?? null
     }
   );
-  await runTrackedJob(
-    {
-      ...storedJob,
-      workspaceRoot,
-      logFile
-    },
-    () =>
-      executeTaskRun({
-        ...request,
-        onProgress: progress
-      }),
-    { logFile }
-  );
+  // A detached worker has no parent to notice it: it watches its own record
+  // and a lifetime cap instead. Without this, a cancelled or abandoned job
+  // kept billing until its turn finished on its own.
+  const stopWatchdog = startWorkerWatchdog(workspaceRoot, jobId, {
+    onStop: (reason) => {
+      appendLogLine(logFile, `Worker stopping itself (${reason}).`);
+      shutdownClient()
+        .catch(() => {})
+        .finally(() => process.exit(1));
+    }
+  });
+  try {
+    await runTrackedJob(
+      {
+        ...storedJob,
+        workspaceRoot,
+        logFile
+      },
+      () =>
+        executeTaskRun({
+          ...request,
+          onProgress: progress,
+          // A detached worker's output was invisible until the turn ended.
+          onPartial: createPartialOutputWriter(workspaceRoot, jobId)
+        }),
+      { logFile }
+    );
+  } finally {
+    stopWatchdog();
+  }
 }
 
 async function handleStatus(argv) {
@@ -632,6 +811,9 @@ async function handleStatus(argv) {
   });
 
   const cwd = resolveCommandCwd(options);
+  // A job whose worker is gone is closed here rather than reported as "stale"
+  // forever: this is the one command a person runs while wondering about it.
+  reapStaleJobs(cwd);
   const reference = positionals[0] ?? "";
   if (reference) {
     const snapshot = options.wait
@@ -909,6 +1091,15 @@ export async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
     printUsage();
+    return;
+  }
+
+  // Before any parsing, state write or SDK load. `--` still marks the start of
+  // free text, so `task -- --help` is a prompt, not a help request.
+  const separator = argv.indexOf("--");
+  const helpIndex = argv.findIndex((token) => token === "--help" || token === "-h");
+  if (helpIndex !== -1 && (separator === -1 || helpIndex < separator)) {
+    printCommandHelp(subcommand);
     return;
   }
 

@@ -5,15 +5,27 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 
 import { createTempWorkspace, cleanupDir } from "./helpers.mjs";
-import { generateJobId, upsertJob } from "../lib/state.mjs";
+import {
+  COMPLETED_DEGRADED,
+  generateJobId,
+  isInPlayStatus,
+  isTerminalStatus,
+  listJobs,
+  readJobFile,
+  resolveJobFile,
+  upsertJob,
+  writeJobFile
+} from "../lib/state.mjs";
 import {
   appendLogLine,
   createJobLogFile,
   createJobRecord,
-  SESSION_ID_ENV
+  SESSION_ID_ENV,
+  startWorkerWatchdog
 } from "../lib/tracked-jobs.mjs";
 import {
   enrichJob,
+  reapStaleJobs,
   readJobProgressPreview,
   sortJobsNewestFirst,
   resolveResultJob,
@@ -159,5 +171,130 @@ describe("job-control", () => {
 
   it("resolveCancelableJob throws when no active jobs", () => {
     assert.throws(() => resolveCancelableJob(tempDir, ""), /No active/);
+  });
+});
+
+// A degraded job is finished: it must prune like any other terminal job, and
+// its phase must say why it is not a plain success.
+describe("completed-degraded", () => {
+  it("is terminal, not in play, and enriches to a degraded phase", () => {
+    assert.equal(isTerminalStatus(COMPLETED_DEGRADED), true);
+    assert.equal(isInPlayStatus(COMPLETED_DEGRADED), false);
+    const enriched = enrichJob({
+      id: "job-x",
+      jobClass: "review",
+      status: COMPLETED_DEGRADED,
+      createdAt: new Date().toISOString(),
+      completedAt: new Date().toISOString()
+    });
+    assert.equal(enriched.phase, "degraded");
+    assert.equal(enriched.stale, false);
+  });
+});
+
+// The worker is killed, or the machine reboots: nothing else ever moves the
+// job on, so it was reported as "stale" forever while `/copilot:result`
+// insisted it was still running.
+describe("reapStaleJobs", () => {
+  let repo;
+  before(() => {
+    repo = createTempWorkspace();
+    process.env.CLAUDE_PLUGIN_DATA = path.join(repo, ".plugin-data");
+  });
+  after(() => cleanupDir(repo));
+
+  it("closes a job whose worker is gone, in the index and the job file", () => {
+    const job = createJobRecord({
+      id: generateJobId("task"),
+      kind: "task",
+      kindLabel: "rescue",
+      title: "Orphan",
+      workspaceRoot: repo,
+      jobClass: "task",
+      summary: "orphan"
+    });
+    writeJobFile(repo, job.id, { ...job, status: "running", pid: 999999 });
+    upsertJob(repo, { ...job, status: "running", pid: 999999 });
+
+    const result = reapStaleJobs(repo, { isAlive: () => false });
+
+    assert.deepEqual(result.reaped, [job.id]);
+    const stored = readJobFile(resolveJobFile(repo, job.id));
+    assert.equal(stored.status, "failed");
+    assert.match(stored.errorMessage, /worker process is gone/);
+    assert.equal(listJobs(repo).find((entry) => entry.id === job.id).status, "failed");
+  });
+
+  it("does not touch state when every worker is alive", () => {
+    assert.deepEqual(reapStaleJobs(repo, { isAlive: () => true }).reaped, []);
+  });
+});
+
+// The worker cannot watch whoever spawned it -- that process exits seconds
+// later by design -- so it watches its own record and a lifetime cap.
+describe("startWorkerWatchdog", () => {
+  let repo;
+  before(() => {
+    repo = createTempWorkspace();
+    process.env.CLAUDE_PLUGIN_DATA = path.join(repo, ".plugin-data");
+  });
+  after(() => cleanupDir(repo));
+
+  function seedJob(status) {
+    const job = createJobRecord({
+      id: generateJobId("task"),
+      kind: "task",
+      kindLabel: "rescue",
+      title: "Watched",
+      workspaceRoot: repo,
+      jobClass: "task",
+      summary: "watched"
+    });
+    writeJobFile(repo, job.id, { ...job, status });
+    return job;
+  }
+
+  // The watchdog unrefs its timer on purpose -- it must never be the reason a
+  // worker stays alive -- so the test holds the event loop open itself.
+  async function watch(jobId, options = {}, giveUpMs = 0) {
+    const keepAlive = setInterval(() => {}, 5);
+    try {
+      return await new Promise((resolve) => {
+        const stop = startWorkerWatchdog(repo, jobId, {
+          pollMs: 5,
+          ...options,
+          onStop: (reason) => {
+            stop();
+            resolve(reason);
+          }
+        });
+        if (giveUpMs > 0) {
+          setTimeout(() => {
+            stop();
+            resolve("still-running");
+          }, giveUpMs);
+        }
+      });
+    } finally {
+      clearInterval(keepAlive);
+    }
+  }
+
+  it("stops when the job was cancelled elsewhere", async () => {
+    const job = seedJob("cancelled");
+    assert.equal(await watch(job.id), "abandoned");
+  });
+
+  it("stops and records a worker that outlived its cap", async () => {
+    const job = seedJob("running");
+    assert.equal(await watch(job.id, { maxLifetimeMs: -1 }), "overdue");
+    const stored = readJobFile(resolveJobFile(repo, job.id));
+    assert.equal(stored.status, "failed");
+    assert.match(stored.errorMessage, /stopped itself/);
+  });
+
+  it("leaves a healthy job alone", async () => {
+    const job = seedJob("running");
+    assert.equal(await watch(job.id, {}, 60), "still-running");
   });
 });

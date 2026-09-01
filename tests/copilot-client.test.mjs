@@ -282,6 +282,33 @@ describe("buildSessionConfig", () => {
     assert.equal(config.onPermissionRequest({ kind: "write", fileName: "../../escape.txt" }).kind, "reject");
   });
 
+  it("adds --add-dir roots to the fence and hands them to the runtime", () => {
+    const extra = path.join(parent, "lib-repo");
+    fs.mkdirSync(extra, { recursive: true });
+    const sink = { current: null };
+    const config = buildSessionConfig(
+      { cwd: ws, workspaceRoot: ws, additionalDirectories: [extra] },
+      WORKSPACE_WRITE,
+      sink
+    );
+
+    assert.deepEqual(config.additionalDirectories, [extra]);
+    assert.equal(
+      config.onPermissionRequest({ kind: "write", fileName: path.join(extra, "src", "a.js") }).kind,
+      "approve-once"
+    );
+    assert.equal(
+      config.onPermissionRequest({ kind: "write", fileName: path.join(parent, "escape.txt") }).kind,
+      "reject"
+    );
+    assert.ok(config.tools[0].description.includes(extra));
+  });
+
+  it("leaves additionalDirectories off the config when none were given", () => {
+    const config = buildSessionConfig({ cwd: ws, workspaceRoot: ws }, WORKSPACE_WRITE, { current: null });
+    assert.equal(config.additionalDirectories, undefined);
+  });
+
   it("reports touched files through runPrompt end to end", async () => {
     const target = new FakeCopilotSession({ _cannedEvents: [], _cannedResponse: { data: { content: "ok" } } });
     const sink = { current: null };
@@ -418,5 +445,53 @@ describe("buildTaskPayload", () => {
     assert.deepEqual(payload.touchedFiles, []);
     assert.deepEqual(payload.denials, []);
     assert.deepEqual(payload.reasoningSummary, []);
+  });
+});
+
+// assistant.usage fires once per API call, not once per turn: assigning
+// instead of accumulating reported the last call and hid the rest.
+describe("runPrompt: usage and live output", () => {
+  const usageEvent = (data) => ({ type: "assistant.usage", data });
+
+  it("sums usage across API calls and prefers it over the response field", async () => {
+    const session = new FakeCopilotSession({
+      _cannedEvents: [
+        usageEvent({ inputTokens: 1000, outputTokens: 100, reasoningTokens: 10, cost: 0.5, model: "m" }),
+        usageEvent({ inputTokens: 2000, outputTokens: 200, cost: 0.25 })
+      ],
+      _cannedResponse: { data: { content: "done", outputTokens: 200 } }
+    });
+
+    const result = await runPrompt(session, "go");
+
+    assert.equal(result.usage.apiCalls, 2);
+    assert.equal(result.usage.inputTokens, 3000);
+    assert.equal(result.usage.outputTokens, 300);
+    assert.equal(result.usage.cost, 0.75);
+    assert.equal(result.outputTokens, 300);
+    assert.equal(result.model, "m");
+  });
+
+  it("forwards tool progress and flushes partial output", async () => {
+    const session = new FakeCopilotSession({
+      _cannedEvents: [
+        { type: "tool.execution_start", data: { toolName: "run_command", toolCallId: "1" } },
+        { type: "tool.execution_progress", data: { toolCallId: "1", progressMessage: "running tests" } },
+        { type: "assistant.message_delta", data: { deltaContent: "half an answer" } }
+      ],
+      _cannedResponse: { data: { content: "the whole answer" } }
+    });
+
+    const progress = [];
+    const partials = [];
+    // partialFlushMs 0 defeats the throttle so one delta is enough to see it.
+    await runPrompt(session, "go", {
+      onProgress: (event) => progress.push(event.message),
+      onPartial: (text) => partials.push(text),
+      partialFlushMs: 0
+    });
+
+    assert.ok(progress.some((message) => message.includes("running tests")), progress.join("|"));
+    assert.deepEqual(partials, ["half an answer"]);
   });
 });

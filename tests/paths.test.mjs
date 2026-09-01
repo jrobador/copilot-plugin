@@ -9,7 +9,9 @@ import {
   canonicalizePath,
   createWorkspacePolicy,
   isInsideWorkspace,
-  isWideRoot
+  findOutsidePathsInText,
+  isWideRoot,
+  resolveAdditionalDirectories
 } from "../lib/paths.mjs";
 import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
 
@@ -254,5 +256,87 @@ describe("isWideRoot", () => {
     assert.equal(isWideRoot(""), true);
     assert.equal(isWideRoot(undefined), true);
     assert.equal(isWideRoot(null), true);
+  });
+});
+
+describe("additional directories (--add-dir)", () => {
+  let fixture;
+  before(() => {
+    fixture = makeFixture();
+    fs.writeFileSync(path.join(fixture.outside, "notes.md"), "# notes\n");
+  });
+  after(() => cleanupDir(fixture.parent));
+
+  it("puts an added directory inside the fence, relative to itself", () => {
+    const policy = createWorkspacePolicy(fixture.ws, fixture.ws, [fixture.outside]);
+    const result = isInsideWorkspace(policy, path.join(fixture.outside, "notes.md"));
+    assert.equal(result.inside, true);
+    assert.equal(result.relative, "notes.md");
+    assert.equal(result.root, canonicalizePath(fixture.outside));
+  });
+
+  it("leaves the workspace root and everything else judged as before", () => {
+    const policy = createWorkspacePolicy(fixture.ws, fixture.ws, [fixture.outside]);
+    const inside = isInsideWorkspace(policy, "src/index.js");
+    assert.equal(inside.inside, true);
+    assert.equal(inside.relative, "src/index.js");
+    assert.equal(inside.root, canonicalizePath(fixture.ws));
+    assert.equal(isInsideWorkspace(policy, path.join(fixture.parent, "elsewhere.txt")).inside, false);
+  });
+
+  it("resolves relative entries and refuses one that is not a directory", () => {
+    assert.deepEqual(resolveAdditionalDirectories(["outside"], fixture.parent), [
+      path.resolve(fixture.parent, "outside")
+    ]);
+    assert.deepEqual(resolveAdditionalDirectories(undefined, fixture.parent), []);
+    assert.throws(
+      () => resolveAdditionalDirectories([path.join(fixture.parent, "nope")], fixture.parent),
+      /does not exist/
+    );
+    assert.throws(
+      () => resolveAdditionalDirectories([path.join(fixture.outside, "notes.md")], fixture.parent),
+      /is not a directory/
+    );
+  });
+});
+
+describe("findOutsidePathsInText", () => {
+  let fixture;
+  before(() => {
+    fixture = makeFixture();
+    fs.writeFileSync(path.join(fixture.outside, "notes.md"), "# notes\n");
+  });
+  after(() => cleanupDir(fixture.parent));
+
+  it("finds a real path outside the fence, and strips sentence punctuation", () => {
+    const target = path.join(fixture.outside, "notes.md");
+    const found = findOutsidePathsInText(`please read ${target}, then stop`, fixture.ws);
+    assert.equal(found.length, 1);
+    assert.equal(found[0].resolved, canonicalizePath(target));
+  });
+
+  it("says nothing about paths inside the fence", () => {
+    assert.deepEqual(findOutsidePathsInText("open ./src/index.js and src/index.js", fixture.ws), []);
+  });
+
+  // A false positive blocks a legitimate prompt, so anything that is not
+  // unambiguously a path -- or that does not exist -- is left alone.
+  it("ignores prose, URLs and paths that do not exist", () => {
+    const cases = [
+      "see lib/render.mjs for the details",
+      "fetch https://example.com/a/b and parse it",
+      "the Foo::bar helper is wrong",
+      "write to /dev/null",
+      `read ${path.join(fixture.parent, "not-there", "ghost.js")}`
+    ];
+    for (const text of cases) {
+      assert.deepEqual(findOutsidePathsInText(text, fixture.ws), [], text);
+    }
+  });
+
+  it("caps what it reports, so a pasted stack trace cannot flood the error", () => {
+    const target = path.join(fixture.outside, "notes.md");
+    const text = Array.from({ length: 30 }, (_, index) => `${target}${index === 0 ? "" : ""} x`).join(" ");
+    assert.ok(findOutsidePathsInText(text, fixture.ws, { limit: 2 }).length <= 2);
   });
 });

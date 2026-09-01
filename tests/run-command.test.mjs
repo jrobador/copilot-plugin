@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createWorkspacePolicy } from "../lib/paths.mjs";
-import { READ_ONLY, WORKSPACE_WRITE } from "../lib/permissions.mjs";
+import { READ_ONLY, WORKSPACE_EXECUTE, WORKSPACE_WRITE } from "../lib/permissions.mjs";
 import { resolveBinary } from "../lib/process.mjs";
 import {
   allowedPrograms,
@@ -62,8 +62,16 @@ describe("allowedPrograms", () => {
     assert.deepEqual(list, [...WRITE_PROGRAMS, "bun", "ok+name"]);
   });
 
-  it("ignores extras in read-only mode", () => {
-    assert.deepEqual(allowedPrograms(READ_ONLY, { extraPrograms: ["bun"] }), ["git", "rg"]);
+  // The owner grants extraPrograms per workspace, not per mode. Gating them on
+  // --write made `/copilot:setup --allow-programs` dead for reviews, which are
+  // the jobs that most often need one more tool.
+  it("honors extras in every mode, including read-only", () => {
+    assert.deepEqual(allowedPrograms(READ_ONLY, { extraPrograms: ["bun"] }), ["git", "rg", "bun"]);
+    assert.deepEqual(allowedPrograms(WORKSPACE_EXECUTE, { extraPrograms: ["bun"] }), [...WRITE_PROGRAMS, "bun"]);
+  });
+
+  it("gives an execute job the write toolchain, without the write permission", () => {
+    assert.deepEqual(allowedPrograms(WORKSPACE_EXECUTE), WRITE_PROGRAMS);
   });
 });
 
@@ -95,10 +103,20 @@ describe("planCommand: program allowlist", () => {
     assert.equal(planCommand({ program: 42 }, WORKSPACE_WRITE, policy).ok, false);
   });
 
-  it("honors extraPrograms only in write mode", () => {
+  it("honors extraPrograms in every mode, and still validates the name", () => {
     assert.ok(allowed("bun", ["test"], WORKSPACE_WRITE, { extraPrograms: ["bun"] }));
-    assert.equal(allowed("bun", ["test"], READ_ONLY, { extraPrograms: ["bun"] }), false);
+    assert.ok(allowed("bun", ["test"], READ_ONLY, { extraPrograms: ["bun"] }));
     assert.equal(allowed("bun", ["test"], WORKSPACE_WRITE, { extraPrograms: ["../bun"] }), false);
+  });
+
+  // The crossed axis: a review runs the toolchain, but git stays non-mutating
+  // and every write is still refused by the permission handler.
+  it("lets an execute job run the toolchain but not mutate the repository", () => {
+    assert.ok(allowed("pytest", ["-q"], WORKSPACE_EXECUTE));
+    assert.ok(allowed("npm", ["test"], WORKSPACE_EXECUTE));
+    assert.ok(allowed("git", ["diff"], WORKSPACE_EXECUTE));
+    assert.match(refused("git", ["push"], WORKSPACE_EXECUTE), /non-mutating job/);
+    assert.match(refused("git", ["commit", "-m", "x"], WORKSPACE_EXECUTE), /non-mutating job/);
   });
 });
 
@@ -369,10 +387,13 @@ describe("scrubEnvironment", () => {
 });
 
 describe("resolveLaunch", () => {
-  it("reports a missing program as a failure, not a denial", () => {
+  // Reported as a plain failure, a missing program reached the job as an
+  // allowed command that happened to say nothing -- invisible to the degraded
+  // marker, which is exactly the case that made a review look complete.
+  it("reports a missing program as a denial", () => {
     const launch = resolveLaunch({ program: "definitely-missing-xyz", argv: [] });
     assert.equal(launch.ok, false);
-    assert.equal(launch.denial, false);
+    assert.equal(launch.denial, true);
     assert.match(launch.reason, /not found on PATH/);
   });
 
@@ -560,13 +581,12 @@ describe("executeCommand and the tool handler", () => {
     assert.equal(formatCommandResult({ exitCode: null, signal: "SIGTERM", timedOut: false, output: "" }), "[terminated by signal SIGTERM]");
   });
 
-  it("reports a missing program as a failure result", async () => {
+  it("reports a missing program as a denial the job can see", async () => {
     const { tool, decisions } = makeTool({ config: { extraPrograms: ["definitely-missing-xyz"] } });
     const result = await tool.handler({ program: "definitely-missing-xyz" });
-    assert.equal(result.resultType, "failure");
-    assert.match(result.textResultForLlm, /failed to start: definitely-missing-xyz was not found/);
-    assert.equal(decisions[0].allowed, true);
-    assert.equal(decisions[0].detail.exitCode, null);
+    assert.equal(result.resultType, "denied");
+    assert.match(result.textResultForLlm, /definitely-missing-xyz is allowed for this job but was not found on PATH/);
+    assert.equal(decisions[0].allowed, false);
   });
 
   describe("Windows", { skip: !IS_WINDOWS }, () => {

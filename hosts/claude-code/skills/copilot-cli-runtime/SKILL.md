@@ -23,6 +23,11 @@ Execution rules:
 - Pass aliases (`opus`, `sonnet`, `codex`, `gemini`) through unchanged; the plugin resolves them.
 - Never add `--write` yourself. Forward it only when it is already in the request: `/copilot:rescue` settles write access with the user before routing. A run without it is read-only; Copilot reports the change as a diff.
 - Never add `--unsafe-shell` or `--allow-wide-root` on your own; forward them only when the user typed them. The first hands Copilot an unfenced shell, the second lets a `--write` job treat your home directory or a drive root as its workspace.
+- `--add-dir <path>` (repeatable) widens the job's fence to another directory: everything inside it becomes readable, and writable in a `--write` job. Forward it only when the user typed it; never add it yourself.
+
+- Exit status 2 means the run was **degraded**: something it asked for was refused, so it did not see everything. Return the output verbatim with its banner, and never summarize the banner away or present the verdict as a clean result.
+- `--dry-run` validates the root, the `--add-dir` list, the paths the prompt names, the model and PATH without contacting Copilot. Use it when a run looks likely to be refused; it costs nothing.
+- Free text that starts with a dash must go after `--`. An unknown flag is now an error instead of silently becoming part of the prompt.
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.

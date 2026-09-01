@@ -8,7 +8,7 @@ alwaysApply: false
 This workspace exposes GitHub Copilot through MCP tools (prefix `copilot_`).
 Use them to get a second model's review or to hand Copilot a task.
 
-- **Reviews are read-only.** `copilot_review` and `copilot_adversarial_review`
+- **Reviews never write.** `copilot_review` and `copilot_adversarial_review`
   never edit files; present their findings ordered by severity, with file and
   line, and stop. **Do not auto-apply any fix from a review.** Ask which
   findings, if any, the user wants addressed before touching a file.

@@ -41,9 +41,9 @@ Argument handling:
 - `--model` picks which model reviews the code. Leave it unset unless the user asks for one. Aliases: `opus`, `sonnet`, `codex`, `gemini`. Run `/copilot:setup` to list what the account can use.
 - `--effort` sets reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`) on models that support it. Leave it unset unless the user asks.
 
-The review runs read-only. Copilot may read the repository and run commands the
-runtime classifies as read-only; writes, network access and anything else are
-refused by the plugin, not merely discouraged in the prompt.
+The review does not run read-only any more: it runs in `workspace-execute`, so Copilot may run the repository's own commands — its test suite, one test, a linter, a type checker — to check its own conclusions. It still cannot change anything: writes, URL fetches and mutating git subcommands are refused by the plugin, not merely discouraged in the prompt. Pass `--read-only` to narrow it back to `git` and `rg`.
+
+If the command exits with status 2, the run was **degraded**: something it asked for was refused, so it did not see everything. Return its output verbatim, banner included, and do not summarize the banner away — a clean verdict from a review that could not read the code is worse than no review.
 
 Foreground flow:
 - Run:

@@ -1,6 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -10,8 +11,14 @@ import { scriptFakeSessions } from "./fake-copilot-fixture.mjs";
 import { ensureClient, SDK_MODULE_ENV, shutdownClient } from "../lib/copilot-client.mjs";
 import { getRepoRoot } from "../lib/git.mjs";
 import { readStoredJob } from "../lib/job-control.mjs";
+import { READ_ONLY } from "../lib/permissions.mjs";
 import { SHELL_TOOL_NAMES } from "../lib/run-command.mjs";
-import { executeApprovalResume, executeReviewRun, executeTaskRun } from "../lib/runs.mjs";
+import {
+  assertWriteRootAcceptable,
+  executeApprovalResume,
+  executeReviewRun,
+  executeTaskRun
+} from "../lib/runs.mjs";
 import {
   AWAITING_APPROVAL,
   listJobs,
@@ -110,6 +117,105 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
     assert.equal(session.config.onPermissionRequest({ kind: "write", fileName: "change.txt" }).kind, "reject");
     assert.equal(session.config.onPermissionRequest({ kind: "read", path: "change.txt" }).kind, "approve-once");
     fs.unlinkSync(path.join(tempDir, "change.txt"));
+  });
+
+  it("task: refuses a prompt naming a path outside the fence before spending a turn", async () => {
+    const outside = createTempWorkspace();
+    const target = path.join(outside, "reference.md");
+    fs.writeFileSync(target, "# reference\n");
+    try {
+      scriptFakeSessions({ _cannedResponse: { data: { content: "should never run" } } });
+      const before = (await ensureClient(repoRoot)).sessions.length;
+
+      await assert.rejects(
+        () => executeTaskRun({ cwd: tempDir, prompt: `read ${target} and explain it`, write: false }),
+        /outside this job's fence.*--add-dir/s
+      );
+      // The point of the check: no session, so no turn, so no cost.
+      assert.equal((await ensureClient(repoRoot)).sessions.length, before);
+
+      // With the directory granted, the same prompt runs.
+      const execution = await executeTaskRun({
+        cwd: tempDir,
+        prompt: `read ${target} and explain it`,
+        write: false,
+        addDirs: [outside]
+      });
+      assert.equal(execution.exitStatus, 0);
+    } finally {
+      cleanupDir(outside);
+    }
+  });
+
+  it("review: runs in workspace-execute by default, read-only on request", async () => {
+    const clean = { data: { content: '{"verdict":"approve","summary":"Fine.","findings":[],"next_steps":[]}' } };
+    scriptFakeSessions({ _cannedResponse: clean });
+    await executeReviewRun({ cwd: tempDir, reviewName: "Review" });
+    let client = await ensureClient(repoRoot);
+    // The mode is not on the session config; it shows in what the handler does.
+    // git is the read-only pair, npm is the one the crossed axis adds.
+    let tool = client.sessions.at(-1).config.tools.find((entry) => entry.name === "run_command");
+    assert.equal((await tool.handler({ program: "npm", args: ["test"] })).resultType !== "denied", true);
+
+    scriptFakeSessions({ _cannedResponse: clean });
+    await executeReviewRun({ cwd: tempDir, reviewName: "Review", permissionMode: READ_ONLY });
+    client = await ensureClient(repoRoot);
+    tool = client.sessions.at(-1).config.tools.find((entry) => entry.name === "run_command");
+    const denied = await tool.handler({ program: "npm", args: ["test"] });
+    assert.equal(denied.resultType, "denied");
+    assert.match(denied.textResultForLlm, /read-only allowlist/);
+  });
+
+  it("review: a denied request degrades the run instead of passing as clean", async () => {
+    scriptFakeSessions({
+      _cannedResponse: {
+        data: { content: '{"verdict":"approve","summary":"Fine as is.","findings":[],"next_steps":[]}' }
+      },
+      // A read the fence refuses: the exact shape of "the model never saw it".
+      _permissionRequests: [{ kind: "read", path: path.join(tempDir, "..", "outside-the-fence.txt") }]
+    });
+
+    const execution = await executeReviewRun({ cwd: tempDir, reviewName: "Review" });
+
+    assert.equal(execution.degraded, true);
+    // 2, not 0 and not 1: it answered, but not from everything it asked for.
+    assert.equal(execution.exitStatus, 2);
+    assert.match(execution.rendered, /DEGRADED RUN/);
+    assert.match(execution.rendered, /Verdict: unreliable/);
+    assert.doesNotMatch(execution.rendered, /No material findings\./);
+    assert.match(execution.rendered, /Denied:/);
+    assert.equal(execution.payload.denials.length, 1);
+  });
+
+  it("task: --add-dir reaches the session and its permission handler", async () => {
+    scriptFakeSessions({ _cannedResponse: { data: { content: "Task done." } } });
+    const extra = createTempWorkspace();
+    const job = taskJob("task-add-dir-1");
+    try {
+      await runTrackedJob(job, () =>
+        executeTaskRun({
+          cwd: tempDir,
+          prompt: "read the sibling repo",
+          write: false,
+          addDirs: [extra],
+          jobId: job.id
+        })
+      );
+
+      const client = await ensureClient(repoRoot);
+      const session = client.sessions.at(-1);
+      assert.deepEqual(session.config.additionalDirectories, [extra]);
+      assert.equal(
+        session.config.onPermissionRequest({ kind: "read", path: path.join(extra, "notes.md") }).kind,
+        "approve-once"
+      );
+      assert.equal(
+        session.config.onPermissionRequest({ kind: "read", path: path.join(extra, "..", "elsewhere.md") }).kind,
+        "reject"
+      );
+    } finally {
+      cleanupDir(extra);
+    }
   });
 
   let firstTaskSessionId;
@@ -327,6 +433,26 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
 
       assert.equal(readStoredJob(tempDir, id).status, "cancelled", id);
       assert.equal(listJobs(tempDir).find((entry) => entry.id === id).status, "cancelled", id);
+    }
+  });
+});
+
+describe("assertWriteRootAcceptable", () => {
+  it("refuses a write job whose --add-dir is the home directory", () => {
+    const ws = createTempWorkspace();
+    try {
+      assert.doesNotThrow(() => assertWriteRootAcceptable({ write: true }, ws, [ws]));
+      assert.throws(
+        () => assertWriteRootAcceptable({ write: true }, ws, [os.homedir()]),
+        /--add-dir .*home directory/
+      );
+      // Read-only jobs and an explicit opt-in are unaffected.
+      assert.doesNotThrow(() => assertWriteRootAcceptable({ write: false }, ws, [os.homedir()]));
+      assert.doesNotThrow(() =>
+        assertWriteRootAcceptable({ write: true, allowWideRoot: true }, ws, [os.homedir()])
+      );
+    } finally {
+      cleanupDir(ws);
     }
   });
 });

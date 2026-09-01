@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Copilot rescue subagent
-argument-hint: "[--background|--wait] [--write|--read-only] [--resume|--fresh] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--unsafe-shell] [--allow-wide-root] [what Copilot should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--write|--read-only] [--resume|--fresh] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--unsafe-shell] [--allow-wide-root] [--add-dir <path>] [what Copilot should investigate, solve, or continue]"
 context: fork
 allowed-tools: Bash(node:*), AskUserQuestion
 ---
@@ -40,6 +40,11 @@ Write access:
   `AskUserQuestion` call with two questions, so the user is asked once.
 - Never add `--unsafe-shell` or `--allow-wide-root` yourself; forward them only
   when the user typed them.
+- If `task` exits with status 2 the run was degraded: something it asked for was
+  refused. Return the output verbatim with its banner; do not present it as a
+  clean result.
+- `--add-dir <path>` (repeatable) lets Copilot reach a directory outside the
+  repository. Forward it when the user typed it; never add it yourself.
 
 Continuing a previous rescue:
 

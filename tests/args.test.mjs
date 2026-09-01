@@ -86,6 +86,17 @@ describe("splitRawArgumentString", () => {
 // The plugin re-tokenizes argv only when it receives
 // exactly one token, so `task "fix C:\x"` and `task --write "fix C:\x"` used to
 // parse the same prompt differently.
+describe("parseArgs array options", () => {
+  it("collects a repeated option and defaults it to an empty array", () => {
+    const { options, positionals } = parseArgs(["--add-dir", "a", "--add-dir=b", "fix it"], {
+      arrayOptions: ["add-dir"]
+    });
+    assert.deepEqual(options["add-dir"], ["a", "b"]);
+    assert.deepEqual(positionals, ["fix it"]);
+    assert.deepEqual(parseArgs([], { arrayOptions: ["add-dir"] }).options["add-dir"], []);
+  });
+});
+
 describe("normalizeArgv", () => {
   it("re-tokenizes a single packed flag string but never a bare prompt", () => {
     assert.deepEqual(normalizeArgv(["--base main --background"]), ["--base", "main", "--background"]);
@@ -96,5 +107,26 @@ describe("normalizeArgv", () => {
     assert.deepEqual(normalizeArgv(["--base main look for race conditions"]), ["--base", "main", "look", "for", "race", "conditions"]);
     assert.deepEqual(normalizeArgv([""]), []);
     assert.deepEqual(normalizeArgv(["   "]), []);
+  });
+});
+
+// An unregistered flag used to become prompt text: `task --help` opened a
+// session and paid for a turn, and a forwarded `--wait` was swallowed whole.
+describe("parseArgs on unknown options", () => {
+  it("refuses an unknown flag and points at the escape hatch", () => {
+    assert.throws(() => parseArgs(["--backgruond", "hi"], { booleanOptions: ["background"] }), /Unknown option --backgruond/);
+    assert.throws(() => parseArgs(["-x"], {}), /Unknown option -x/);
+    assert.throws(() => parseArgs(["--nope"], {}), /put the text after/);
+  });
+
+  it("keeps free text that starts with a dash when it comes after --", () => {
+    const { positionals } = parseArgs(["--", "--verbose", "is", "broken"], {});
+    assert.deepEqual(positionals, ["--verbose", "is", "broken"]);
+  });
+
+  it("still allows unknown flags where a caller opts in", () => {
+    const { options, positionals } = parseArgs(["--whatever", "x"], { allowUnknown: true });
+    assert.deepEqual(positionals, ["--whatever", "x"]);
+    assert.deepEqual(options, {});
   });
 });

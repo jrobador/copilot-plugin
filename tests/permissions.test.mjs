@@ -12,6 +12,7 @@ import {
   normalizeMode,
   PROTECTED_PATHS,
   READ_ONLY,
+  WORKSPACE_EXECUTE,
   RUN_COMMAND_TOOL_NAME,
   WORKSPACE_WRITE
 } from "../lib/permissions.mjs";
@@ -463,5 +464,83 @@ describe("makeSentinelEscalation", () => {
     assert.equal(escalate("nested/dir/ESCALATE_ME.txt"), true);
     assert.equal(escalate("src/index.js"), false);
     assert.equal(escalate(""), false);
+  });
+});
+
+describe("additional directories (--add-dir)", () => {
+  let parent;
+  let ws;
+  let extra;
+  before(() => {
+    parent = createTempWorkspace();
+    ws = path.join(parent, "ws");
+    extra = path.join(parent, "lib-repo");
+    fs.mkdirSync(ws, { recursive: true });
+    fs.mkdirSync(path.join(extra, ".git"), { recursive: true });
+  });
+  after(() => cleanupDir(parent));
+
+  it("allows reads and writes in an added directory, and still refuses its .git", () => {
+    const policy = { workspaceRoot: ws, cwd: ws, additionalDirectories: [extra] };
+    const read = decidePermission({ kind: "read", path: path.join(extra, "src", "a.js") }, READ_ONLY, policy);
+    assert.equal(read.allowed, true);
+    assert.equal(read.file, "src/a.js");
+
+    const write = decidePermission({ kind: "write", fileName: path.join(extra, "src", "a.js") }, WORKSPACE_WRITE, policy);
+    assert.equal(write.allowed, true);
+
+    const gitWrite = decidePermission({ kind: "write", fileName: path.join(extra, ".git", "config") }, WORKSPACE_WRITE, policy);
+    assert.equal(gitWrite.allowed, false);
+    assert.match(gitWrite.reason, /protected path/);
+  });
+
+  it("keeps refusing paths outside every root, naming them all", () => {
+    const policy = { workspaceRoot: ws, cwd: ws, additionalDirectories: [extra] };
+    const result = decidePermission({ kind: "read", path: path.join(parent, "other.txt") }, READ_ONLY, policy);
+    assert.equal(result.allowed, false);
+    assert.ok(result.reason.includes(extra), result.reason);
+  });
+});
+
+// The crossed axis: a review has to be able to run the repository's tests to
+// confirm a hypothesis, and must still be unable to change a single byte.
+describe("workspace-execute", () => {
+  let ws;
+  before(() => {
+    ws = createTempWorkspace();
+    fs.mkdirSync(path.join(ws, "src"), { recursive: true });
+  });
+  after(() => cleanupDir(ws));
+
+  const policy = () => ({ workspaceRoot: ws, cwd: ws });
+
+  it("is a real mode, and unknown modes still fail closed to read-only", () => {
+    assert.equal(normalizeMode("workspace-execute"), WORKSPACE_EXECUTE);
+    assert.equal(normalizeMode("whatever"), READ_ONLY);
+    assert.equal(normalizeMode(true), "workspace-write");
+  });
+
+  it("reads inside the fence, and refuses every way of changing anything", () => {
+    assert.equal(decidePermission({ kind: "read", path: "src/a.js" }, WORKSPACE_EXECUTE, policy()).allowed, true);
+
+    const write = decidePermission({ kind: "write", fileName: "src/a.js" }, WORKSPACE_EXECUTE, policy());
+    assert.equal(write.allowed, false);
+    // The denial has to name this mode, not "read-only": a model told it is
+    // read-only spends a turn re-deriving that it may run the test suite.
+    assert.match(write.reason, /may run commands but may not modify anything/);
+
+    assert.equal(decidePermission({ kind: "url", url: "https://example.com" }, WORKSPACE_EXECUTE, policy()).allowed, false);
+    assert.equal(decidePermission({ kind: "memory", action: "store" }, WORKSPACE_EXECUTE, policy()).allowed, false);
+    assert.equal(
+      decidePermission({ kind: "mcp", serverName: "s", toolName: "t", readOnly: false }, WORKSPACE_EXECUTE, policy()).allowed,
+      false
+    );
+  });
+
+  it("does not inherit write mode's blanket approval of shell commands", () => {
+    const request = shell({ commands: [{ identifier: "rm -rf", readOnly: false }] });
+    const result = decidePermission(request, WORKSPACE_EXECUTE, policy());
+    assert.equal(result.allowed, false);
+    assert.match(result.reason, /can modify state/);
   });
 });

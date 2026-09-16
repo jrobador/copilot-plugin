@@ -1,6 +1,6 @@
 ---
 description: Run a Copilot review that challenges the implementation approach and design choices
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--effort <level>] [focus ...]'
+argument-hint: '[--wait|--background] [--pr <number>] [--base <ref>] [--scope auto|working-tree|branch] [--add-dir <path>] [--read-only] [--dry-run] [--model <model>] [--effort <level>] [focus ...]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
@@ -48,6 +48,12 @@ Argument handling:
 - `--model` and `--effort` are runtime controls. Do not treat them as part of the user's focus text.
 
 The review does not run read-only any more: it runs in `workspace-execute`, so Copilot may run the repository's own commands — its test suite, one test, a linter, a type checker — to check its own conclusions. It still cannot change anything: writes, URL fetches and mutating git subcommands are refused by the plugin, not merely discouraged in the prompt. Pass `--read-only` to narrow it back to `git` and `rg`.
+
+Reviewing a pull request: `--pr <number>` reviews that pull request against its own base branch. It needs the GitHub CLI (`gh`), and it needs the pull request's head commit to be checked out already — a review reads the files on disk, so reviewing from a different commit would judge the wrong code. If the tree is elsewhere the command refuses and tells you to run `gh pr checkout <number>`; it never fetches or checks anything out on your behalf. The plugin fetches the diff and description itself, so Copilot never needs network access of its own. `--pr` cannot be combined with `--scope`; `--base <ref>` still works alongside it and overrides which base the pull request is compared against.
+
+`--add-dir <path>` (repeatable) adds a directory to the review's fence, for a change that spans a sibling checkout. Readable only: a review never writes, in any directory.
+
+`--dry-run` validates everything — including, with `--pr`, that `gh` works, the pull request exists and the head is checked out — and exits without spending a Copilot turn.
 
 If the command exits with status 2, the run was **degraded**: something it asked for was refused, so it did not see everything. Return its output verbatim, banner included, and do not summarize the banner away — a clean verdict from a review that could not read the code is worse than no review.
 

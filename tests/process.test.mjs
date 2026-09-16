@@ -8,6 +8,8 @@ import {
   isProcessAlive,
   processCommandLine,
   resolveBinary,
+  resolveProgram,
+  bundledBinary,
   terminateProcessTree,
   formatCommandFailure
 } from "../lib/process.mjs";
@@ -87,6 +89,39 @@ describe("resolveBinary", () => {
 
   it("returns null for an empty command", () => {
     assert.equal(resolveBinary(""), null);
+  });
+});
+
+// `rg` is on the allowlist of every job but absent from most machines, and a
+// review that cannot search is a review with a hole in it. The Copilot
+// runtime we already depend on ships a copy.
+describe("bundledBinary / resolveProgram", () => {
+  it("knows only the programs the runtime actually bundles", () => {
+    assert.equal(bundledBinary("node"), null);
+    assert.equal(bundledBinary("git"), null);
+    assert.equal(bundledBinary("gh"), null);
+  });
+
+  it("returns null instead of throwing when the runtime is not installed here", () => {
+    // The platform package is an optional dependency and may be absent, and
+    // its internal layout is not a published contract. Either way the answer
+    // is null and the caller falls back to PATH.
+    assert.equal(bundledBinary("rg", { platform: "aix", arch: "ppc" }), null);
+  });
+
+  it("finds the bundled ripgrep when the runtime is installed", (t) => {
+    const found = bundledBinary("rg");
+    if (!found) {
+      t.skip("Copilot runtime not installed in this checkout");
+      return;
+    }
+    assert.match(found, /ripgrep/);
+    assert.equal(resolveProgram("rg"), resolveBinary("rg") ?? found);
+  });
+
+  it("falls back to PATH, and still reports a genuinely missing program", () => {
+    assert.equal(resolveProgram("node"), resolveBinary("node"));
+    assert.equal(resolveProgram("nonexistent-binary-xyz"), null);
   });
 });
 

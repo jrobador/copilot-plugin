@@ -10,7 +10,7 @@ One Node runtime, two front ends: Claude Code uses slash commands, Cursor uses M
 
 | Command | What it does |
 |---|---|
-| `/copilot:review` | Read-only review of your uncommitted changes or your branch |
+| `/copilot:review` | Review of your uncommitted changes, your branch, or a pull request |
 | `/copilot:adversarial-review` | Steerable review that challenges the design, not just the code |
 | `/copilot:rescue` | Hand a task to Copilot: investigate, diagnose, or fix (read-only unless you grant `--write`) |
 | `/copilot:status` | Running, paused and recent jobs for this repository |
@@ -68,11 +68,16 @@ Copilot receives the diff **and** read access to the repository, so it opens the
 ```bash
 /copilot:review                          # working tree
 /copilot:review --base main              # branch vs. base
+/copilot:review --pr 128                 # a pull request, against its own base
 /copilot:review --background
 /copilot:review --model opus             # pick who reviews
 ```
 
 Multi-file reviews take a while; `--background` is usually the right call.
+
+**Reviewing a pull request.** `--pr <number>` reviews that pull request against its own base branch. The plugin asks the GitHub CLI (`gh`) for the diff and description itself, in its own process — Copilot never gets network access, because a job that can reach GitHub with your token is a job that can send your code anywhere.
+
+It requires the pull request's head commit to be checked out already, and refuses with the `gh pr checkout <number>` you need if it is not. That is the point rather than an inconvenience: a review reads the files on disk, so reviewing a pull request from a different commit would judge the wrong code and, because the prompt tells the model to trust the file over the diff, would do it confidently. `--pr` never fetches, checks out, or writes a ref on your behalf. It also cannot be combined with `--scope`, though `--base <ref>` still works alongside it when the base branch is ambiguous or not fetched under that name.
 
 ### `/copilot:adversarial-review`
 
@@ -186,7 +191,7 @@ The ceiling, stated plainly: `run_command` fences which program starts, with whi
 
 A `--write` job is also refused when its workspace root is your home directory, an ancestor of it, or a drive root, because "inside the workspace" would then mean everything you own. Pass `--allow-wide-root` if you really mean it.
 
-**Working across more than one directory.** `--add-dir <path>` on a rescue (repeatable) adds a directory to that job's fence — a sibling repository, a shared library checkout, a directory of specs. Reads, writes and `run_command` path arguments are then judged against the workspace root *and* each added directory, and the runtime is told about them so its file completion sees them. Every other rule travels along: an added directory's `.git/`, `.github/workflows/`, `.husky/` and `.vscode/tasks.json` are protected exactly like the workspace's, and `--add-dir` naming your home directory or a drive root is refused in a `--write` job for the same reason a wide workspace root is. A path that does not exist is an error, not a warning. Not exposed over MCP.
+**Working across more than one directory.** `--add-dir <path>` on a rescue or a review (repeatable) adds a directory to that job's fence — a sibling repository, a shared library checkout, a directory of specs. Reads, writes and `run_command` path arguments are then judged against the workspace root *and* each added directory, and the runtime is told about them so its file completion sees them. Every other rule travels along: an added directory's `.git/`, `.github/workflows/`, `.husky/` and `.vscode/tasks.json` are protected exactly like the workspace's, and `--add-dir` naming your home directory or a drive root is refused in a `--write` job for the same reason a wide workspace root is. A path that does not exist is an error, not a warning. Not exposed over MCP.
 
 `git` is fenced beyond the path rules, because its arguments are refs and config keys rather than paths. `--global` and `--system` are refused in both modes, and a `--write` job may not run `git push`, `git credential`, `git config`, `git reset --hard` or `git clean -f`: it can do its work in the repository, but not publish it, read your credential helper, or throw away changes you never handed it.
 
@@ -214,6 +219,8 @@ Copilot's runtime ships shell tools (`bash` on Unix, `powershell` on Windows, pl
 | execute (both reviews) and `--write` | `git npm pnpm yarn npx node python python3 pytest dotnet cargo go make rg ls`, plus anything added with `/copilot:setup --allow-programs a,b,c`. In execute mode git is still held to its read-only subcommands. |
 
 Programs added with `/copilot:setup --allow-programs` now apply in **every** mode. They used to be silently dropped outside `--write`, which made the setting dead for reviews — the jobs most likely to need one more tool.
+
+`rg` is on every mode's list but is absent from most machines. When it is not on PATH, the plugin uses the copy of ripgrep that ships inside the Copilot runtime it already depends on, and if that is missing too, the denial names `git grep` rather than leaving the model to work out that its search tool is gone. The same applies to `gh`, which is on no list in any mode and never will be: it is outbound network carrying your token, which is the surface a non-write job closes by refusing URL fetches. Pull request data reaches a review through `--pr`, fetched by the plugin, not by the job.
 
 Every argument that looks like a path is resolved and must land inside the workspace (or an added directory). Options that relocate a program or make it evaluate inline code are refused in both modes: `git -C`/`--git-dir`/`-c` before the subcommand, `node -e`/`-r`/`--import`, `python -c`, `npm --prefix`/`-g`, `make -C`/`-f`, `cargo --manifest-path`, `go -C`, `rg --pre`, and the like.
 

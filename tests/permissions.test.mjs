@@ -17,6 +17,7 @@ import {
   WORKSPACE_WRITE
 } from "../lib/permissions.mjs";
 import { cleanupDir, createTempWorkspace } from "./helpers.mjs";
+import os from "node:os";
 
 const shell = (overrides = {}) => ({
   kind: "shell",
@@ -175,6 +176,34 @@ describe("decidePermission: workspace containment (both modes)", () => {
       assert.equal(result.allowed, false);
       assert.match(result.reason, /outside the workspace/);
       assert.match(result.reason, /Include the file in the prompt/);
+    });
+
+    // The runtime spools large tool output to a file in the OS temp directory
+    // and then reads it back. Refusing that read protected nothing -- the
+    // bytes were produced inside the job and never left the machine -- and
+    // marked the run degraded for failing to see evidence it had just made.
+    it(`lets the runtime read back its own spooled tool output (${mode})`, () => {
+      for (const name of [
+        "1789573477855-copilot-tool-output-e435de.txt",
+        "copilot-tool-output-abc.txt",
+        "copilot-tool-output-original-abc.txt",
+        "original-output-17895-abc.txt"
+      ]) {
+        const spool = path.join(os.tmpdir(), name);
+        const result = decidePermission({ kind: "read", path: spool }, mode, policy);
+        assert.equal(result.allowed, true, name);
+      }
+    });
+
+    it(`still refuses other files in the temp directory (${mode})`, () => {
+      for (const name of ["secrets.txt", "copilot-notes.txt", "tool-output-abc.txt"]) {
+        const result = decidePermission({ kind: "read", path: path.join(os.tmpdir(), name) }, mode, policy);
+        assert.equal(result.allowed, false, name);
+      }
+      // The name alone is not enough: it has to be in the temp directory,
+      // not merely somewhere that chose to use it.
+      const elsewhere = path.join(os.tmpdir(), "nested", "copilot-tool-output-abc.txt");
+      assert.equal(decidePermission({ kind: "read", path: elsewhere }, mode, policy).allowed, false);
     });
 
     it(`refuses a shell command that names a path outside the workspace (${mode})`, () => {

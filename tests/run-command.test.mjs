@@ -95,6 +95,29 @@ describe("planCommand: program allowlist", () => {
     }
   });
 
+  // An execute job has the whole toolchain, and the denial used to tell it it
+  // had git and rg. The model then spent turns re-deriving its own
+  // permissions from a message that was simply wrong.
+  it("names the list this job actually has, in every mode", () => {
+    const execute = refused("gh", ["pr", "diff"], WORKSPACE_EXECUTE);
+    for (const program of ["npm", "node", "pytest", "cargo", "make"]) {
+      assert.match(execute, new RegExp(`\\b${program}\\b`), `execute denial omitted ${program}`);
+    }
+    assert.doesNotMatch(execute, /read-only jobs may run/);
+    assert.match(execute, /git is limited to its read subcommands/);
+
+    const write = refused("bun", ["--version"], WORKSPACE_WRITE);
+    assert.match(write, /allowed: git, npm/);
+    assert.doesNotMatch(write, /read subcommands/, "a write job's git is not limited");
+  });
+
+  // A denial that only says no costs a turn while the model works out what it
+  // may do instead. Where there is an in-fence equivalent, name it.
+  it("names the substitute for programs a job is never getting", () => {
+    assert.match(refused("gh", ["pr", "diff"], WORKSPACE_EXECUTE), /already in the prompt[\s\S]*--pr/);
+    assert.match(refused("gh", ["pr", "diff"], READ_ONLY), /GitHub is not reachable from inside a job/);
+  });
+
   it("refuses paths and odd names as programs", () => {
     for (const program of ["git.exe", "./git", "C:\\x\\git.exe", "/usr/bin/git", "", "  ", "gi t"]) {
       assert.equal(plan(program, ["status"]).ok, false, JSON.stringify(program));

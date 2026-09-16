@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0 — 2026-09-16
+
+A delegated review of a pull request went badly and the post-mortem named five problems. Four were real, and behind all of them was one gap: there was no way to say "review pull request N", so the caller improvised by asking Copilot to fetch the diff itself, hit the fence, and got told the wrong thing about what it was allowed to run.
+
+### Added
+
+- **`--pr <number>` on `review` and `adversarial-review`.** Reviews a pull request against its own base branch. The plugin asks the GitHub CLI for the diff and description in its own process; `gh` is not on any job's allowlist and is not going to be, because it is outbound network carrying your token — the surface a non-write job already closes by refusing URL fetches. The pull request's description goes into the prompt as the only statement of intent in the input, bounded, fenced, labelled as a claim to check rather than an instruction to follow, and stripped of any standalone tag line — the prompt is a stack of instruction sections, so a body free to close one and open another would be giving the model orders. Also over MCP, as `pr`: it only selects what to review, and it fails closed.
+- **The pull request's head must be checked out, and the command says so instead of guessing.** A review reads the files on disk — the session gets the repository as a directory attachment and the prompt tells the model to open the files around each hunk — so reviewing a pull request from a different commit would judge the wrong code, and the grounding rules would make it confident about it. If `HEAD` is not the pull request's head the command refuses and names `gh pr checkout <n>`. It never fetches, checks out or writes a ref on your behalf; every missing piece is an error naming the command you run, because a review has no `fetch` in its git allowlist and so could not recover on its own either. A dirty tree at the right commit is a note in the review, not a refusal.
+- **`--add-dir <path>` on both reviews**, repeatable, matching what `task` already had. A change that spans a sibling checkout could not be reviewed: the fence refused every read there and the error named a flag the review command did not accept. Readable only — a review never writes, in any directory. Not exposed over MCP, where the arguments come from a model.
+
+### Fixed
+
+- **A denial that named the wrong allowlist.** Refusing a program in `workspace-execute` — the mode both reviews run in — reported "read-only jobs may run: git (read subcommands), rg" while the job actually had the whole toolchain. The model then spent turns re-deriving its own permissions from a message that was simply wrong. Every mode now names the list it actually has.
+- **`rg` missing from PATH is no longer a dead end.** `rg` is on every mode's list but absent from most machines. The plugin now uses the copy of ripgrep that ships inside the Copilot runtime it already depends on, and the pre-flight warning and the launch agree about it. When a program really is unavailable, the denial names the in-fence substitute — `git grep` for `rg` — instead of leaving the model to work it out.
+- **The runtime can read back its own spooled tool output.** When a tool produces more than the runtime wants to hold in memory it writes the rest to a file in the OS temp directory and reads it back. That read is outside the workspace, so the fence refused it — and the run was marked degraded for failing to see evidence it had just generated itself and that never left the machine. Refusing it protected nothing. Reads are now allowed for files sitting directly in the temp directory under the runtime's own spool names, and for nothing else there. This one was reported before and could not be reproduced; it turned up in the adversarial review of this very release, with the shell tools excluded, which is why the earlier theory that it needed `--unsafe-shell` was wrong.
+- **A truncated read is no longer treated as a refusal.** The review prompts told the model to stop and file "Review was incomplete" whenever it could not see something, which it also did when `view` simply returned one page of a file. They now say to re-issue `view` with `view_range`, or take the whole file with `git show`, and reserve the incomplete-review finding for what the fence actually refused.
+
+### Changed
+
+- **The `--add-dir` rule the rescue agent follows.** It was "forward it only when the user typed it; never add it yourself", which left the agent watching a pre-flight error that names the exact flag it was forbidden to use. It may now pass `--add-dir` for a directory the user named in their request, including one surfaced by that error — but never one the user did not mention, and never one it picked itself, which would make the pre-flight a self-escalation loop.
+- **Run one job with `--dry-run` before launching several in parallel.** Added to the agent and skill instructions. N parallel runs sharing one undiscovered defect cost N times what discovering it once costs, which is how the run behind this release burned its retries.
+
 ## 0.3.0 — 2026-09-01
 
 ### Added

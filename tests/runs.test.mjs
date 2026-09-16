@@ -187,6 +187,37 @@ describe("runs: review / task / approve flows against the fake SDK", () => {
     assert.equal(execution.payload.denials.length, 1);
   });
 
+  // A review that spans two checkouts had no way to say so: --add-dir existed
+  // only on a task, so the fence refused every read in the sibling directory
+  // and named a flag the review command did not accept.
+  it("review: --add-dir reaches the session and its permission handler", async () => {
+    scriptFakeSessions({
+      _cannedResponse: { data: { content: '{"verdict":"approve","summary":"Fine.","findings":[],"next_steps":[]}' } }
+    });
+    const extra = createTempWorkspace();
+    try {
+      await executeReviewRun({ cwd: tempDir, reviewName: "Review", addDirs: [extra] });
+
+      const session = (await ensureClient(repoRoot)).sessions.at(-1);
+      assert.deepEqual(session.config.additionalDirectories, [extra]);
+      assert.equal(
+        session.config.onPermissionRequest({ kind: "read", path: path.join(extra, "notes.md") }).kind,
+        "approve-once"
+      );
+      assert.equal(
+        session.config.onPermissionRequest({ kind: "read", path: path.join(extra, "..", "elsewhere.md") }).kind,
+        "reject"
+      );
+      // Still a review: an added directory is readable, never writable.
+      assert.equal(
+        session.config.onPermissionRequest({ kind: "write", fileName: path.join(extra, "notes.md") }).kind,
+        "reject"
+      );
+    } finally {
+      cleanupDir(extra);
+    }
+  });
+
   it("task: --add-dir reaches the session and its permission handler", async () => {
     scriptFakeSessions({ _cannedResponse: { data: { content: "Task done." } } });
     const extra = createTempWorkspace();

@@ -40,7 +40,7 @@ Reload Cursor. The `copilot_*` tools (review, rescue, status, result, approve, d
 { "mcpServers": { "copilot": { "command": "copilot-mcp", "env": { "COPILOT_MCP_ALLOW_WRITE": "1" } } } }
 ```
 
-`--unsafe-shell`, `--allow-wide-root` and `--add-dir` are not exposed over MCP at all. Run `copilot-plugin task` in a terminal if you need them.
+`--unsafe-shell`, `--allow-wide-root` and `--add-dir` are not exposed over MCP at all: they widen what a job may reach, and MCP arguments come from a model rather than from you. Run `copilot-plugin task` or `copilot-plugin review` in a terminal if you need them. `pr` is exposed, because it only selects what to review and fails closed when the pull request's head is not checked out.
 
 ## 3. (Optional) Commands and the rule
 

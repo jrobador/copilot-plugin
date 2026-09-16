@@ -19,6 +19,7 @@ import {
 } from "../lib/copilot-client.mjs";
 import { readStdinIfPiped } from "../lib/fs.mjs";
 import { resolveReviewTarget } from "../lib/git.mjs";
+import { parsePullRequestNumber } from "../lib/github.mjs";
 import { resolveAdditionalDirectories } from "../lib/paths.mjs";
 import { WORKSPACE_EXECUTE } from "../lib/permissions.mjs";
 import { binaryAvailable, runCommandChecked } from "../lib/process.mjs";
@@ -95,10 +96,12 @@ const COMMON_FLAGS = [
 ];
 
 const REVIEW_FLAGS = [
-  "  --base <ref>          Review the branch diff against this ref.",
-  "  --scope <auto|working-tree|branch>",
+  "  --pr <number>         Review this pull request. Needs `gh`, and its head already checked out.",
+  "  --base <ref>          Review the branch diff against this ref. With --pr, overrides the PR's base.",
+  "  --scope <auto|working-tree|branch>   Not valid with --pr.",
+  "  --add-dir <path>      Add a directory to this job's fence. Repeatable.",
   "  --read-only           Narrow to git and rg; the default also runs the repository's toolchain.",
-  "  --dry-run             Validate everything and print what would run. Costs nothing.",
+  "  --dry-run             Validate everything and print what would run. No Copilot turn.",
   "  --model <model|alias> Model id, or one of: opus, sonnet, codex, gemini.",
   "  --effort <low|medium|high|xhigh|max>"
 ];
@@ -180,8 +183,8 @@ function printUsage() {
     [
       "Usage:",
       "  node bin/copilot-plugin.mjs setup [--install-runtime] [--enable-review-gate|--disable-review-gate] [--allow-programs a,b,c|--clear-allowed-programs] [--json]",
-      "  node bin/copilot-plugin.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>]",
-      "  node bin/copilot-plugin.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <level>] [focus text]",
+      "  node bin/copilot-plugin.mjs review [--wait|--background] [--pr <number>] [--base <ref>] [--scope <auto|working-tree|branch>] [--add-dir <path>]... [--model <model>] [--effort <level>]",
+      "  node bin/copilot-plugin.mjs adversarial-review [--wait|--background] [--pr <number>] [--base <ref>] [--scope <auto|working-tree|branch>] [--add-dir <path>]... [--model <model>] [--effort <level>] [focus text]",
       "  node bin/copilot-plugin.mjs task [--background|--wait] [--write|--read-only] [--dry-run] [--add-dir <path>]... [--unsafe-shell] [--allow-wide-root] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <level>] [prompt]",
       "  node bin/copilot-plugin.mjs status [job-id] [--all] [--json]",
       "  node bin/copilot-plugin.mjs result [job-id] [--json]",
@@ -548,7 +551,8 @@ export function enqueueBackgroundTask(cwd, job, request, seams = {}) {
 
 async function handleReviewCommand(argv, config) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["base", "scope", "model", "effort", "cwd"],
+    valueOptions: ["base", "scope", "model", "effort", "cwd", "pr"],
+    arrayOptions: ["add-dir"],
     booleanOptions: ["json", "background", "wait", "read-only", "dry-run"],
     aliasMap: {
       m: "model"
@@ -561,6 +565,9 @@ async function handleReviewCommand(argv, config) {
   const workspaceRoot = resolveCommandWorkspace(options);
   const focusText = positionals.join(" ").trim();
   const permissionMode = options["read-only"] ? READ_ONLY : undefined;
+  // Validated here, before anything spawns: this is the only value a review
+  // puts on a command line, so it is checked the way a git ref is.
+  const pr = options.pr === undefined ? null : parsePullRequestNumber(options.pr);
 
   if (options["dry-run"]) {
     const report = await dryRunReport({
@@ -571,16 +578,22 @@ async function handleReviewCommand(argv, config) {
       permissionMode: permissionMode ?? WORKSPACE_EXECUTE,
       reviewName: config.reviewName,
       base: options.base,
-      scope: options.scope
+      scope: options.scope,
+      pr,
+      addDirs: options["add-dir"]
     });
     outputCommandResult(report, renderDryRun(report), options.json);
     if (!report.ready) process.exitCode = 1;
     return;
   }
 
+  // Resolved once and handed down. With --pr this is a network call, so
+  // resolving it again inside the run would be a second round trip that can
+  // disagree with the first.
   const target = resolveReviewTarget(cwd, {
     base: options.base,
-    scope: options.scope
+    scope: options.scope,
+    pr
   });
 
   const metadata = buildReviewJobMetadata(config.reviewName, target);
@@ -599,6 +612,9 @@ async function handleReviewCommand(argv, config) {
         cwd,
         base: options.base,
         scope: options.scope,
+        pr,
+        target,
+        addDirs: options["add-dir"],
         model,
         effort,
         focusText,

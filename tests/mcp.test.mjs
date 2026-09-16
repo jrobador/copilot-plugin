@@ -111,6 +111,23 @@ describe("MCP server", () => {
   });
   // Claude Code's rescue command may not add these flags unless the user typed
   // them. MCP has no user-typed channel, so the model must not reach them.
+  // `pr` selects what to review and fails closed on a wrong number, so a
+  // model may pass it. `add_dir` widens the fence, which over MCP has no
+  // user-typed channel to authorize it, so it must stay unreachable.
+  it("gives the review tools a pull request number but not a way to widen the fence", () => {
+    for (const name of ["copilot_review", "copilot_adversarial_review"]) {
+      const tool = TOOLS.find((entry) => entry.name === name);
+      assert.equal(tool.inputSchema.properties.pr.type, "integer");
+      assert.equal(tool.inputSchema.properties.add_dir, undefined);
+      assert.equal(tool.inputSchema.properties["add-dir"], undefined);
+
+      assert.deepEqual(tool.toArgv({ pr: 12 }).slice(0, 3), [name === "copilot_review" ? "review" : "adversarial-review", "--pr", "12"]);
+      const argv = tool.toArgv({ pr: 12, add_dir: "/etc", "add-dir": "/etc" });
+      assert.ok(!argv.includes("--add-dir"));
+      assert.ok(!argv.includes("/etc"));
+    }
+  });
+
   it("keeps the escalation flags out of the rescue tool's reach", () => {
     const rescue = TOOLS.find((tool) => tool.name === "copilot_rescue");
     const properties = rescue.inputSchema.properties;

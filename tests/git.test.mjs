@@ -145,10 +145,12 @@ describe("git", () => {
     });
 
     it("refuses, without fetching, when the base ref is not local", () => {
-      const before = execSync("git for-each-ref --format=%(refname)", { cwd: tempDir }).toString();
+      // execFileSync, not execSync: `%(refname)` goes through /bin/sh on Linux
+      // and the parentheses are a syntax error there.
+      const refs = () => execFileSync("git", ["for-each-ref", "--format=%(refname)"], { cwd: tempDir }).toString();
+      const before = refs();
       assert.throws(() => withPr(canned({ baseRefName: "never-fetched" })), /git fetch origin never-fetched/);
-      const after = execSync("git for-each-ref --format=%(refname)", { cwd: tempDir }).toString();
-      assert.equal(after, before, "resolving a PR target must not create refs");
+      assert.equal(refs(), before, "resolving a PR target must not create refs");
     });
 
     it("refuses a base ref name that is not safe to put on a command line", () => {

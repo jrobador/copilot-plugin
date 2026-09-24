@@ -239,10 +239,39 @@ describe("planCommand: git", () => {
   it("allows the ordinary write subcommands in write mode", () => {
     assert.ok(allowed("git", ["commit", "-m", "x"]));
     assert.ok(allowed("git", ["checkout", "-b", "feature"]));
+    assert.ok(allowed("git", ["checkout", "-b", "feature", "origin/main"]));
+    assert.ok(allowed("git", ["switch", "-c", "feature"]));
+    assert.ok(allowed("git", ["switch", "--create", "feature", "main"]));
+    assert.ok(allowed("git", ["stash", "list"]));
+    assert.ok(allowed("git", ["stash", "show"]));
+    assert.ok(allowed("git", ["restore", "--staged", "src/a.js"]));
     assert.ok(allowed("git", ["log", "--output=out.txt"]));
     assert.ok(allowed("git", ["add", "src/a.js"]));
-    assert.ok(allowed("git", ["stash"]));
     assert.ok(allowed("git", ["reset", "--soft", "HEAD~1"]));
+  });
+
+  // A job often shares its tree with the owner's uncommitted work and with
+  // other jobs. One stashed to compare against the base; had it stopped before
+  // `stash pop`, another job's finished changes would have vanished from view.
+  it("refuses forms that hide, overwrite or swap out the working tree in write mode", () => {
+    const cases = [
+      [["stash"], /hides uncommitted work/],
+      [["stash", "push", "-m", "x"], /hides uncommitted work/],
+      [["stash", "pop"], /hides uncommitted work/],
+      [["restore", "src/a.js"], /overwrites files/],
+      [["restore", "--staged", "--worktree", "src/a.js"], /overwrites files/],
+      [["checkout", "--", "src/a.js"], /can overwrite files/],
+      [["checkout", "."], /can overwrite files/],
+      [["checkout", "main"], /can overwrite files/],
+      [["checkout", "-B", "feature"], /can overwrite files/],
+      [["checkout", "-b", "feature", "--", "src/a.js"], /can overwrite files/],
+      [["switch", "main"], /moves HEAD/],
+      [["switch", "-C", "feature"], /moves HEAD/],
+      [["switch", "-c", "feature", "--discard-changes"], /moves HEAD/]
+    ];
+    for (const [args, pattern] of cases) {
+      assert.match(refused("git", args), pattern, args.join(" "));
+    }
   });
 
   // These take refs and config keys, not paths, so the workspace containment

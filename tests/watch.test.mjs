@@ -40,6 +40,22 @@ describe("watch: log lines to events", () => {
     );
   });
 
+  it("hides a successful look at the tree, but not a failing one", () => {
+    const ok = "[2026-09-24T17:00:00.000Z] Ran command: git diff --stat (exit 0).";
+    assert.equal(classifyLogLine(ok), null);
+    assert.equal(classifyLogLine("[2026-09-24T17:00:00.000Z] Ran command: ls src (exit 0)."), null);
+    assert.equal(
+      classifyLogLine("[2026-09-24T17:00:00.000Z] Ran command: git status --short (exit 128)."),
+      "CMD command: git status --short (exit 128)"
+    );
+    assert.equal(classifyLogLine(ok, { allCommands: true }), "CMD command: git diff --stat (exit 0)");
+    // Tests and builds are never quiet, whatever they exit with.
+    assert.equal(
+      classifyLogLine("[2026-09-24T17:00:00.000Z] Ran command: npx vitest run (exit 0)."),
+      "CMD command: npx vitest run (exit 0)"
+    );
+  });
+
   it("ignores tool chatter, block bodies and unprefixed lines", () => {
     assert.equal(classifyLogLine("[2026-09-24T17:00:00.000Z] Running tool: view."), null);
     assert.equal(classifyLogLine("[2026-09-24T17:00:00.000Z] Tool edit completed."), null);

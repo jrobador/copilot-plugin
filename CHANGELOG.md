@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+The first day of `watch` in real use showed what it could not stop. A job stashed the shared working tree to compare against the base, with another job's finished changes in it; a stop before `stash pop` would have hidden them. A cancel was reported as a failure. And a watch filled with every `git diff` the model ran to check its own work.
+
+### Changed
+
+- **A write job may not hide or overwrite the working tree.** `git stash` (except `stash list` and `stash show`), `git restore` (except `restore --staged <path>`), `git checkout` and `git switch` are refused, beside `reset --hard` and `clean -f`. A job often shares its tree with the owner's uncommitted work and with other jobs, and these hide that work, overwrite it with committed content, or move HEAD under it. Creating a branch stays available: `checkout -b <new-branch>` and `switch -c <new-branch>`, with an optional start point and no other options.
+- **`watch` hides a successful look at the tree.** A `git status`, `diff`, `log` or `show`, or an `ls`, that exits 0 is not printed; one that fails still is, and tests and builds always are. `--all-commands` shows everything.
+- **The skill says how to shape a job.** One repository and one concern per job, sized well inside the 30-minute turn; `--cwd` is where commands run; two jobs that meet at a contract each get it verbatim.
+
+### Fixed
+
+- **A cancelled job is reported as cancelled.** `cancel` kills the worker and then records the cancellation, and `watch` reaped the job in between, so it ended with `status=failed` and "the worker process is gone". `watch` now closes a dead worker's job only after seeing it stale on two polls in a row.
+
 ## 0.5.0 — 2026-09-24
 
 A background job was a black box. The rescue agent backgrounded its own Bash call, ended its turn with nothing to say, and the caller learned the outcome from a later notification, or from the 30-minute turn timeout. In one real run a job spent its last stretch retrying `pytest` against a fence that refused the interpreter, and nobody could see it: the log recorded every one of those attempts, but no command surfaced the log while there was still time to cancel.

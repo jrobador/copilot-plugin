@@ -51,6 +51,13 @@ Following a background job (for the caller, not for `copilot:copilot-rescue`):
 - A repeated failing `CMD` or an early `DENIED` means the job is working blind: cancel it with `cancel <job-id>` and relaunch with the cause fixed, instead of waiting for the turn timeout.
 - On `END`, run `result <job-id> --cwd <workspace>`. On `END status=awaiting-approval`, the decision is the owner's: `approve` or `deny`.
 - A `Monitor` expires after at most 30 minutes. Re-arm it with `watch <job-id> --since-now` so events already seen are not replayed.
+- Successful `git status`, `diff`, `log`, `show` and `ls` are hidden; a failing one still shows. `--all-commands` shows them all.
+
+Shaping a job (for the caller):
+- One Copilot turn is capped at 30 minutes, and a job that hits the cap ends without a report. Size each job to finish well inside it: one repository, one concern. Several small jobs beat one large one, and can run in parallel.
+- `--cwd` is the directory commands run in, not only the job's workspace. The fence is the enclosing git repository either way. Copilot cannot `cd`, and `npm --prefix` and `git -C` are refused, so point `--cwd` at the directory whose tools the job needs (the folder with the `package.json` it tests, for example).
+- Two jobs that meet at a contract (a route, a payload, a file format) each get the contract verbatim in their prompt. Each side's tests mock the other, so a mismatch stays green on both.
+- A write job may not stash, restore, check out a path or an existing branch, or switch branches: those hide or overwrite work the job shares its tree with. It may create a branch with `checkout -b` or `switch -c`.
 
 Available models:
 - Do not carry a hardcoded list. The set depends on the account's entitlements

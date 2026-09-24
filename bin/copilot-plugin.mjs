@@ -177,6 +177,7 @@ const COMMAND_HELP = {
     "  END      the final status and the command to run next",
     "",
     "  --since-now             Skip the events already in the log (to re-arm a watch).",
+    "  --all-commands          Also show successful git status/diff/log/show and ls, hidden by default.",
     "  --beat-seconds <s>      Default 180. 0 turns the heartbeat off.",
     "  --silence-seconds <s>   Default 300. 0 turns the silence alert off.",
     "  --poll-interval-ms <ms> Default 2000.",
@@ -915,7 +916,7 @@ function readSecondsOption(value, fallback) {
 async function handleWatch(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd", "beat-seconds", "silence-seconds", "poll-interval-ms"],
-    booleanOptions: ["since-now"]
+    booleanOptions: ["since-now", "all-commands"]
   });
 
   const cwd = resolveCommandCwd(options);
@@ -955,17 +956,24 @@ async function handleWatch(argv) {
     const { lines, rest } = splitCompleteLines(pending + decoder.write(buffer));
     pending = rest;
     for (const line of lines) {
-      const event = classifyLogLine(line);
+      const event = classifyLogLine(line, { allCommands: Boolean(options["all-commands"]) });
       if (event) emit(event);
     }
   };
 
+  let staleSeen = false;
   for (;;) {
     drainLog();
-    // A worker that died without closing its job would otherwise keep this
-    // loop "running" forever.
-    reapStaleJobs(cwd);
     ({ job } = buildSingleJobSnapshot(cwd, reference));
+    // A worker that died without closing its job would keep this loop
+    // "running" forever, so a job seen stale on two polls in a row is closed.
+    // Not on the first: `cancel` kills the worker before it writes
+    // `cancelled`, and reaping in that gap reported a cancel as a failure.
+    if (job.stale && staleSeen) {
+      reapStaleJobs(cwd);
+      ({ job } = buildSingleJobSnapshot(cwd, reference));
+    }
+    staleSeen = Boolean(job.stale);
 
     if (!isActiveJobStatus(job.status)) {
       drainLog();

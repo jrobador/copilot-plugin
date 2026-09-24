@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-09-24
 
 The first day of `watch` in real use showed what it could not stop. A job stashed the shared working tree to compare against the base, with another job's finished changes in it; a stop before `stash pop` would have hidden them. A cancel was reported as a failure. And a watch filled with every `git diff` the model ran to check its own work.
 

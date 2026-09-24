@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-24
 
 A background job was a black box. The rescue agent backgrounded its own Bash call, ended its turn with nothing to say, and the caller learned the outcome from a later notification, or from the 30-minute turn timeout. In one real run a job spent its last stretch retrying `pytest` against a fence that refused the interpreter, and nobody could see it: the log recorded every one of those attempts, but no command surfaced the log while there was still time to cancel.
 

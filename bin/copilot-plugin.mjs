@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 
 import { normalizeArgv, parseArgs } from "../lib/args.mjs";
@@ -69,6 +70,7 @@ import {
   startWorkerWatchdog,
   terminateWorker
 } from "../lib/tracked-jobs.mjs";
+import { classifyLogLine, formatMinutes, latestNarration, renderEndLine, splitCompleteLines } from "../lib/watch.mjs";
 import { resolveWorkspaceRoot } from "../lib/workspace.mjs";
 import {
   renderStoredJobResult,
@@ -163,6 +165,23 @@ const COMMAND_HELP = {
     "  --timeout-ms <ms>     How long --wait waits. Default 240000.",
     ...COMMON_FLAGS
   ],
+  watch: [
+    "Usage: copilot-plugin watch <job-id> [--since-now] [--beat-seconds <s>] [--silence-seconds <s>]",
+    "",
+    "Follow a job while it runs. One line per event; exits when the job stops:",
+    "  CMD      a command Copilot ran, with its exit code",
+    "  DENIED   a request that was refused",
+    "  PAUSED   a request escalated to you",
+    "  BEAT     every --beat-seconds: elapsed time and Copilot's latest narration",
+    "  SILENT   no log activity for --silence-seconds",
+    "  END      the final status and the command to run next",
+    "",
+    "  --since-now             Skip the events already in the log (to re-arm a watch).",
+    "  --beat-seconds <s>      Default 180. 0 turns the heartbeat off.",
+    "  --silence-seconds <s>   Default 300. 0 turns the silence alert off.",
+    "  --poll-interval-ms <ms> Default 2000.",
+    ...COMMON_FLAGS
+  ],
   result: ["Usage: copilot-plugin result [job-id] [--json]", "", "The stored output of a finished job.", "", ...COMMON_FLAGS],
   approve: ["Usage: copilot-plugin approve [job-id] [--json]", "", "Approve a job paused on a permission; it resumes in the background.", "", ...COMMON_FLAGS],
   deny: ["Usage: copilot-plugin deny [job-id] [--json]", "", "Deny a job paused on a permission; it closes without continuing.", "", ...COMMON_FLAGS],
@@ -187,6 +206,7 @@ function printUsage() {
       "  node bin/copilot-plugin.mjs adversarial-review [--wait|--background] [--pr <number>] [--base <ref>] [--scope <auto|working-tree|branch>] [--add-dir <path>]... [--model <model>] [--effort <level>] [focus text]",
       "  node bin/copilot-plugin.mjs task [--background|--wait] [--write|--read-only] [--dry-run] [--add-dir <path>]... [--unsafe-shell] [--allow-wide-root] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <level>] [prompt]",
       "  node bin/copilot-plugin.mjs status [job-id] [--all] [--json]",
+      "  node bin/copilot-plugin.mjs watch <job-id> [--since-now] [--beat-seconds <s>] [--silence-seconds <s>]",
       "  node bin/copilot-plugin.mjs result [job-id] [--json]",
       "  node bin/copilot-plugin.mjs approve [job-id] [--json]",
       "  node bin/copilot-plugin.mjs deny [job-id] [--json]",
@@ -393,7 +413,15 @@ function buildReviewJobMetadata(reviewName, target) {
 }
 
 function renderQueuedTaskLaunch(payload) {
-  return `${payload.title} started in the background as ${payload.jobId}. Check /copilot:status ${payload.jobId} for progress.\n`;
+  // The two follow-up commands name the workspace: job state is kept per
+  // workspace, so run from anywhere else they answer "no job found".
+  const cwd = payload.workspaceRoot ? ` --cwd "${payload.workspaceRoot}"` : "";
+  return [
+    `${payload.title} started in the background as ${payload.jobId}. Check /copilot:status ${payload.jobId} for progress.`,
+    `Follow it live: copilot-plugin watch ${payload.jobId}${cwd}`,
+    `When it ends:   copilot-plugin result ${payload.jobId}${cwd}`,
+    ""
+  ].join("\n");
 }
 
 function getJobKindLabel(kind, jobClass) {
@@ -543,6 +571,7 @@ export function enqueueBackgroundTask(cwd, job, request, seams = {}) {
       status: "queued",
       title: job.title,
       summary: job.summary,
+      workspaceRoot: job.workspaceRoot,
       logFile
     },
     logFile
@@ -868,6 +897,105 @@ function handleResult(argv) {
   outputCommandResult(payload, renderStoredJobResult(job, storedJob), options.json);
 }
 
+function readSecondsOption(value, fallback) {
+  if (value === undefined) return fallback;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    throw new Error(`Expected a number of seconds, got "${value}".`);
+  }
+  return seconds;
+}
+
+/**
+ * Follow one job until it stops, printing only what someone watching would act
+ * on. Built for a host that turns each stdout line into a notification, such as
+ * a Claude Code Monitor: the caller learns about a denied command or a failing
+ * test loop minutes in, instead of from the turn timeout.
+ */
+async function handleWatch(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "beat-seconds", "silence-seconds", "poll-interval-ms"],
+    booleanOptions: ["since-now"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const reference = positionals[0] ?? "";
+  if (!reference) {
+    throw new Error("`watch` requires a job id.");
+  }
+  const beatMs = readSecondsOption(options["beat-seconds"], 180) * 1000;
+  const silenceMs = readSecondsOption(options["silence-seconds"], 300) * 1000;
+  const pollMs = Math.max(100, Number(options["poll-interval-ms"]) || DEFAULT_STATUS_POLL_INTERVAL_MS);
+
+  let { workspaceRoot, job } = buildSingleJobSnapshot(cwd, reference);
+  const logFile = job.logFile ?? readStoredJob(workspaceRoot, job.id)?.logFile ?? null;
+  const emit = (line) => process.stdout.write(`${line}\n`);
+
+  const decoder = new StringDecoder("utf8");
+  let offset = options["since-now"] && logFile && fs.existsSync(logFile) ? fs.statSync(logFile).size : 0;
+  let pending = "";
+  let lastActivity = Date.now();
+  let lastBeat = Date.now();
+  let silenceReported = false;
+
+  const drainLog = () => {
+    if (!logFile || !fs.existsSync(logFile)) return;
+    const size = fs.statSync(logFile).size;
+    if (size <= offset) return;
+    const buffer = Buffer.alloc(size - offset);
+    const fd = fs.openSync(logFile, "r");
+    try {
+      fs.readSync(fd, buffer, 0, buffer.length, offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+    offset = size;
+    lastActivity = Date.now();
+    silenceReported = false;
+    const { lines, rest } = splitCompleteLines(pending + decoder.write(buffer));
+    pending = rest;
+    for (const line of lines) {
+      const event = classifyLogLine(line);
+      if (event) emit(event);
+    }
+  };
+
+  for (;;) {
+    drainLog();
+    // A worker that died without closing its job would otherwise keep this
+    // loop "running" forever.
+    reapStaleJobs(cwd);
+    ({ job } = buildSingleJobSnapshot(cwd, reference));
+
+    if (!isActiveJobStatus(job.status)) {
+      drainLog();
+      // The index can lag the job file on the fields a failure writes.
+      const stored = readStoredJob(workspaceRoot, job.id) ?? {};
+      emit(
+        renderEndLine({
+          ...job,
+          errorMessage: job.errorMessage ?? stored.errorMessage,
+          pendingApproval: job.pendingApproval ?? stored.pendingApproval
+        })
+      );
+      return;
+    }
+
+    const now = Date.now();
+    if (silenceMs > 0 && !silenceReported && now - lastActivity >= silenceMs) {
+      emit(`SILENT no log activity for ${formatMinutes(now - lastActivity)}`);
+      silenceReported = true;
+    }
+    if (beatMs > 0 && now - lastBeat >= beatMs) {
+      const started = Date.parse(job.startedAt ?? job.createdAt ?? "");
+      const elapsed = Number.isFinite(started) ? formatMinutes(now - started) : "?";
+      emit(`BEAT ${elapsed} | ${latestNarration(job.partialOutput) || "(no narration yet)"}`);
+      lastBeat = now;
+    }
+    await sleep(pollMs);
+  }
+}
+
 function handleTaskResumeCandidate(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
@@ -1139,6 +1267,9 @@ export async function main() {
       break;
     case "status":
       await handleStatus(argv);
+      break;
+    case "watch":
+      await handleWatch(argv);
       break;
     case "result":
       handleResult(argv);

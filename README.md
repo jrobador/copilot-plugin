@@ -120,6 +120,26 @@ It supports `--background`, `--wait`, `--resume` and `--fresh`; with neither `--
 
 `/copilot:result` includes the Copilot session id, so you can pick the work up directly in Copilot with `copilot --resume <session-id>`.
 
+### Following a background job
+
+A background job prints its id and two commands: one to follow it, one to read its result.
+
+```bash
+node bin/copilot-plugin.mjs watch task-abc123 --cwd /path/to/repo
+node bin/copilot-plugin.mjs result task-abc123 --cwd /path/to/repo
+```
+
+`watch` prints one line per event worth acting on, and exits when the job stops:
+
+```text
+CMD command: pytest -q (exit 4)
+DENIED command: cmd /c echo test (workspace-write)
+BEAT 6m | ...Now update the tests to the new props.
+END status=completed-degraded | denied=2 | next: result task-abc123
+```
+
+Run it as a Claude Code `Monitor` and each line arrives as a notification while the job runs. A `CMD` that keeps failing or an early `DENIED` means the job is working blind: cancel it and relaunch with the cause fixed, instead of waiting for the turn timeout. `--since-now` re-arms a watch without replaying events already seen.
+
 ### `/copilot:approve`, `/copilot:deny`
 
 A job can pause on a decision that should be yours. When the permission policy flags a request for the owner, the job stops with status `awaiting-approval`, keeps its Copilot session, and `/copilot:status` shows what it wants to do:
@@ -238,7 +258,7 @@ Claude Code slash command (.md)     Cursor MCP tool (copilot_*)
         │                          bin/copilot-mcp.mjs   (stdio MCP server)
         │                                    │
         └────────────► bin/copilot-plugin.mjs ◄──────────┘
-                       one CLI: setup|review|task|status|result|approve|deny|cancel
+                       one CLI: setup|review|task|status|watch|result|approve|deny|cancel
                             ├─ lib/copilot-client.mjs   @github/copilot-sdk over JSON-RPC
                             │    ├─ lib/permissions.mjs  decides every permission request
                             │    └─ lib/run-command.mjs  the argv-only shell replacement

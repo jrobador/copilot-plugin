@@ -13,10 +13,10 @@ $ARGUMENTS
 
 Execution mode:
 
-- If the request includes `--background`, run the `copilot:copilot-rescue` subagent in the background.
-- If the request includes `--wait`, run the `copilot:copilot-rescue` subagent in the foreground.
-- If neither flag is present, default to foreground.
-- `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
+- Always run the `copilot:copilot-rescue` subagent in the foreground. It returns in seconds when the job is detached.
+- If the request includes `--background`, forward it: the subagent passes it to `task`, and the plugin detaches the job and prints its id with the `watch` and `result` commands for it. Return that output verbatim. The main thread follows the job by running the `watch` command as a `Monitor`, and runs the `result` command when the `END` line arrives.
+- If the request includes `--wait`, or neither flag, the job runs in the foreground.
+- Neither flag is part of the natural-language task text.
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
 
 Write access:

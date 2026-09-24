@@ -16,6 +16,7 @@ import {
   formatCommandResult,
   looksLikePath,
   planCommand,
+  previewOf,
   resolveLaunch,
   RUN_COMMAND_SCHEMA,
   scrubEnvironment,
@@ -647,5 +648,26 @@ describe("executeCommand and the tool handler", () => {
     const { tool } = makeTool({ mode: READ_ONLY });
     const result = await tool.handler({ program: "rg", args: ["--version"] });
     assert.equal(result.resultType, "success");
+  });
+});
+
+describe("previewOf", () => {
+  it("keeps a short output whole", () => {
+    assert.equal(previewOf("git version 2.45\n"), "git version 2.45");
+  });
+
+  it("keeps the summary a long test run prints last", () => {
+    const warnings = Array.from({ length: 60 }, (_, i) => `warning ${i}`);
+    const output = ["RUN v5", ...warnings, "Test Files  1 failed | 2 passed (3)", "Tests  1 failed | 40 passed (41)"].join("\n");
+    const preview = previewOf(output);
+    assert.match(preview, /^RUN v5/);
+    assert.match(preview, /lines omitted/);
+    assert.match(preview, /Tests {2}1 failed \| 40 passed \(41\)$/);
+  });
+
+  it("caps a huge line from the end, not the start", () => {
+    const preview = previewOf(`${"x".repeat(5000)}END`, 5, 15, 100);
+    assert.equal(preview.length, 101);
+    assert.ok(preview.endsWith("END"));
   });
 });

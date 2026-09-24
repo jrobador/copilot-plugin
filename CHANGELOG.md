@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+A background job was a black box. The rescue agent backgrounded its own Bash call, ended its turn with nothing to say, and the caller learned the outcome from a later notification, or from the 30-minute turn timeout. In one real run a job spent its last stretch retrying `pytest` against a fence that refused the interpreter, and nobody could see it: the log recorded every one of those attempts, but no command surfaced the log while there was still time to cancel.
+
+### Added
+
+- **`watch <job-id>`.** Follows a job while it runs and prints one line per event worth acting on: `CMD` (a command and its exit code), `DENIED` (a refused request), `PAUSED` (a request escalated to you), `BEAT` (elapsed time and Copilot's latest narration, every 3 minutes by default), `SILENT` (no log activity for 5 minutes by default), and a final `END` line with the status and the command to run next. It exits when the job leaves `queued` or `running`, so a paused or failed job ends the watch instead of hanging it. It is built for a Claude Code `Monitor`, which turns each line into a notification. `--since-now` re-arms a watch without replaying what was already seen, and a worker that died is closed as `stale` on the way.
+- **The background launch names its follow-up.** `task --background` now prints the `watch` and `result` commands for the job, with `--cwd` set to the job's workspace, and its JSON carries `workspaceRoot`. Job state is kept per workspace, so the same commands run from anywhere else answered "no job found".
+
+### Changed
+
+- **A command's log line carries its exit code, and a refusal's line says what was refused.** They read `Ran command: pytest -q.` and `Denied command request.`, with the detail in a block below. One line per event is what makes a log watchable; the block is still there.
+- **A command's logged output keeps its end.** The preview under each command kept the first 20 lines, so a test run's pass/fail summary sat behind a screen of config warnings and the log said `exit 1` without saying why. It now keeps the first 5 and the last 15 lines, and trims a single huge line from the start instead of the end.
+- **The rescue agent detaches the job, not its own Bash call.** For a long task it passes `--background` to `task` and returns the launch output at once. It never backgrounds the Bash call and never waits. `/copilot:rescue --background` now means the same thing: the flag reaches `task`, and the main thread follows the job with `watch`.
+
 ## 0.4.0 — 2026-09-16
 
 A delegated review of a pull request went badly and the post-mortem named five problems. Four were real, and behind all of them was one gap: there was no way to say "review pull request N", so the caller improvised by asking Copilot to fetch the diff itself, hit the fence, and got told the wrong thing about what it was allowed to run.

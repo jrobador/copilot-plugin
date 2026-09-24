@@ -32,7 +32,9 @@ Execution rules:
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
-- If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
+- If the forwarded request includes `--wait`, strip it: `task` blocks by default.
+- If the forwarded request includes `--background`, pass it to `task`. The plugin detaches the job and prints its id, plus the `watch` and `result` commands for it. Return that output as-is. Never run the Bash call itself in the background, and never wait for the job.
+- In neither case is the flag part of the natural-language task text.
 - If the forwarded request includes `--model`, pass it through to `task` verbatim.
 - If the forwarded request includes `--effort`, pass it through to `task`.
 - If the forwarded request includes `--write`, pass it through to `task` verbatim.
@@ -42,6 +44,13 @@ Command selection:
 - `--fresh`: always use a fresh `task` run, even if the request sounds like a follow-up.
 - `--effort`: accepted values are `low`, `medium`, `high`, `xhigh`, `max`.
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
+
+Following a background job (for the caller, not for `copilot:copilot-rescue`):
+- A detached job has no stdout anyone reads. Follow it with `node "${CLAUDE_PLUGIN_ROOT}/bin/copilot-plugin.mjs" watch <job-id> --cwd <workspace>`, run as a Claude Code `Monitor`: every stdout line becomes a notification while the job runs.
+- `watch` prints only what is worth acting on: `CMD` (a command and its exit code), `DENIED` (a refused request), `PAUSED` (a request escalated to the owner), `BEAT` (elapsed time and Copilot's latest narration, every 3 minutes), `SILENT` (no activity for 5 minutes), and a final `END` line that names the command to run next.
+- A repeated failing `CMD` or an early `DENIED` means the job is working blind: cancel it with `cancel <job-id>` and relaunch with the cause fixed, instead of waiting for the turn timeout.
+- On `END`, run `result <job-id> --cwd <workspace>`. On `END status=awaiting-approval`, the decision is the owner's: `approve` or `deny`.
+- A `Monitor` expires after at most 30 minutes. Re-arm it with `watch <job-id> --since-now` so events already seen are not replayed.
 
 Available models:
 - Do not carry a hardcoded list. The set depends on the account's entitlements
